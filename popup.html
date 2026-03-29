@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            width: 340px;
+            padding: 15px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+        }
+        h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 16px;
+            text-align: center;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 8px;
+        }
+        .warning {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 10px;
+            margin-bottom: 15px;
+            font-size: 12px;
+            border-radius: 4px;
+            color: #856404;
+        }
+        .warning strong {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 13px;
+        }
+        .warning ul {
+            margin: 5px 0 0 20px;
+            padding: 0;
+        }
+        .warning li {
+            margin: 3px 0;
+        }
+        .profile-selector {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #555;
+            font-size: 13px;
+        }
+        select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: white;
+            font-size: 14px;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+        select:focus {
+            outline: none;
+            border-color: #4CAF50;
+        }
+        button {
+            width: 100%;
+            padding: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            margin-bottom: 8px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        .close-btn {
+            background-color: #f44336;
+        }
+        .close-btn:hover {
+            background-color: #da190b;
+        }
+        .info {
+            font-size: 11px;
+            color: #888;
+            text-align: center;
+            margin-top: 12px;
+            padding-top: 8px;
+            border-top: 1px solid #ddd;
+        }
+        .status {
+            font-size: 12px;
+            color: #4CAF50;
+            text-align: center;
+            margin-top: 8px;
+            min-height: 32px;
+        }
+        .author {
+            font-size: 10px;
+            color: #aaa;
+            text-align: center;
+            margin-top: 8px;
+            padding-top: 5px;
+            border-top: 1px solid #eee;
+        }
+        .version {
+            font-size: 9px;
+            color: #bbb;
+            text-align: center;
+            margin-top: 4px;
+        }
+        .warning-icon {
+            font-size: 14px;
+            margin-right: 5px;
+        }
+    </style>
+    <title>МИС БАРС - Автоназначение анализов</title>
+</head>
+<body>
+    <h3>📋 Назначение анализов</h3>
+    
+    <div class="warning">
+        <strong>⚠️ Важное предупреждение!</strong>
+        Перед использованием расширения убедитесь, что отображаются ВСЕ анализы:
+        <ul>
+            <li>Нажмите на цифру в правом нижнем углу (20, 50 и т.д.)</li>
+            <li>В выпадающем списке введите <strong>150</strong> и нажмите Enter</li>
+            <li>Дождитесь загрузки всех анализов</li>
+        </ul>
+        Только после этого нажимайте "Заполнить форму"!
+    </div>
+    
+    <div class="profile-selector">
+        <label>Выберите профиль назначений:</label>
+        <select id="profileSelect">
+            <option value="">-- Выберите профиль --</option>
+        </select>
+    </div>
+    
+    <button id="fillForm">✅ Заполнить форму</button>
+    <button id="closePopup" class="close-btn">✖ Закрыть</button>
+    
+    <div id="status" class="status"></div>
+    
+    <div class="info">
+        ⚡ Автоматическое назначение анализов в МИС БАРС
+    </div>
+    
+    <div class="author">
+        🧠 Идея и разработка: <strong>MorozovRV</strong>
+    </div>
+    <div class="version">
+        Версия 2.0 | Для медицинских информационных систем
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>
