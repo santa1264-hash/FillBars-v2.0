@@ -263,8 +263,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // Обработчик кнопки "Заполнить форму"
 document.getElementById('fillForm').addEventListener('click', () => {
     const select = document.getElementById('profileSelect');
+    const fillButton = document.getElementById('fillForm');
     const selectedProfile = select.value;
     const statusDiv = document.getElementById('status');
+
+    if (fillButton.disabled) {
+        return;
+    }
     
     if (!selectedProfile) {
         statusDiv.textContent = '❌ Пожалуйста, выберите профиль';
@@ -283,8 +288,16 @@ document.getElementById('fillForm').addEventListener('click', () => {
     const formData = PROFILES[selectedProfile];
     statusDiv.textContent = '⏳ Заполнение...';
     statusDiv.style.color = '#ff9800';
+    fillButton.disabled = true;
     
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (!tabs || !tabs[0]) {
+            statusDiv.textContent = '❌ Ошибка: активная вкладка не найдена';
+            statusDiv.style.color = '#f44336';
+            fillButton.disabled = false;
+            return;
+        }
+
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
             func: fillForm,
@@ -301,6 +314,8 @@ document.getElementById('fillForm').addEventListener('click', () => {
                 statusDiv.textContent = '✅ Заполнение выполнено';
                 statusDiv.style.color = '#4CAF50';
             }
+
+            fillButton.disabled = false;
         });
     });
 });
@@ -313,7 +328,7 @@ document.getElementById('closePopup').addEventListener('click', () => {
 // ==============================================
 // ФУНКЦИЯ ЗАПОЛНЕНИЯ ФОРМЫ
 // ==============================================
-function fillForm(formData, profileName) {
+async function fillForm(formData, profileName) {
     console.log("╔════════════════════════════════════════════════════════════╗");
     console.log("║  МИС БАРС - Автоматическое назначение анализов           ║");
     console.log("║  Разработчик: MorozovRV                                   ║");
@@ -322,14 +337,340 @@ function fillForm(formData, profileName) {
     console.log(`=== Автозаполнение: профиль "${profileName}" ===`);
     
     let filledCount = 0;
+
+    const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
+    const TARGET_PAGE_SIZE = 150;
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const getCheckboxes = () => Array.from(document.querySelectorAll(CHECKBOX_SELECTOR));
+
+    const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+    const getElementLabel = (element) => normalizeText([
+        element.textContent,
+        element.value,
+        element.title,
+        element.getAttribute('aria-label')
+    ].filter(Boolean).join(' '));
+
+    const clickElement = (element, useDoubleClick = true) => {
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (useDoubleClick) {
+            element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+        }
+    };
+
+    const isVisible = (element) => {
+        if (!element || !element.isConnected) {
+            return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+            && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && style.opacity !== '0';
+    };
+
+    const dispatchValueEvents = (element) => {
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.dispatchEvent(new KeyboardEvent('keypress', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.dispatchEvent(new KeyboardEvent('keyup', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.blur();
+    };
+
+    const isPagerArea = (element, root) => {
+        const rect = element.getBoundingClientRect();
+        const rootRect = root === document.body
+            ? { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight }
+            : root.getBoundingClientRect();
+
+        const inRoot = rect.left >= rootRect.left - 20
+            && rect.right <= rootRect.right + 20
+            && rect.top >= rootRect.top - 20
+            && rect.bottom <= rootRect.bottom + 80;
+
+        const rootHeight = Math.max(rootRect.height, window.innerHeight);
+        const rootWidth = Math.max(rootRect.width, window.innerWidth);
+        const inBottomPart = rect.top >= rootRect.top + rootHeight * 0.35 || rect.bottom >= window.innerHeight * 0.5;
+        const inRightPart = rect.left >= rootRect.left + rootWidth * 0.3;
+
+        return inRoot && inBottomPart && inRightPart;
+    };
+
+    const waitForRowsReload = async (previousCount) => {
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < 7000) {
+            await sleep(250);
+
+            const currentCount = getCheckboxes().length;
+            if (currentCount >= 100 || currentCount > previousCount) {
+                return currentCount;
+            }
+        }
+
+        return getCheckboxes().length;
+    };
+
+    const waitForCheckboxesToSettle = async () => {
+        const startedAt = Date.now();
+        let lastCount = getCheckboxes().length;
+        let stableSince = Date.now();
+
+        while (Date.now() - startedAt < 7000) {
+            await sleep(250);
+
+            const currentCount = getCheckboxes().length;
+            if (currentCount !== lastCount) {
+                lastCount = currentCount;
+                stableSince = Date.now();
+            }
+
+            if (currentCount > 0 && Date.now() - startedAt >= 1200 && Date.now() - stableSince >= 500) {
+                return currentCount;
+            }
+        }
+
+        return getCheckboxes().length;
+    };
+
+    const setInputValue = async (input, value) => {
+        input.focus();
+
+        const valuePrototype = input instanceof window.HTMLTextAreaElement
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(valuePrototype, 'value')?.set;
+        if (nativeSetter) {
+            nativeSetter.call(input, String(value));
+        } else {
+            input.value = String(value);
+        }
+
+        dispatchValueEvents(input);
+        await sleep(150);
+    };
+
+    const setSelectValue = async (select, value) => {
+        const targetOption = Array.from(select.options).find((option) => {
+            const optionValue = option.value.trim();
+            const optionText = option.textContent.trim();
+            return optionValue === String(value) || optionText === String(value);
+        });
+
+        if (!targetOption) {
+            return false;
+        }
+
+        select.value = targetOption.value;
+        dispatchValueEvents(select);
+        await sleep(150);
+        return true;
+    };
+
+    const setEditableText = async (element, value) => {
+        element.focus();
+
+        if (element.isContentEditable) {
+            element.textContent = String(value);
+        } else {
+            element.click();
+            await sleep(150);
+
+            const active = document.activeElement;
+            if (active && active !== element && /^(INPUT|TEXTAREA)$/i.test(active.tagName)) {
+                await setInputValue(active, value);
+                return true;
+            }
+
+            element.textContent = String(value);
+        }
+
+        dispatchValueEvents(element);
+        await sleep(150);
+        return true;
+    };
+
+    const openAllResearches = async () => {
+        const candidates = Array.from(document.querySelectorAll('button, a, span, div, td, input[type="button"], input[type="submit"]'))
+            .filter((element) => {
+                const label = getElementLabel(element);
+
+                return isVisible(element)
+                    && label.includes('все исследования')
+                    && element.querySelectorAll(CHECKBOX_SELECTOR).length === 0;
+            })
+            .sort((left, right) => {
+                const leftLabel = getElementLabel(left);
+                const rightLabel = getElementLabel(right);
+                const leftExact = leftLabel === 'все исследования' ? 10000 : 0;
+                const rightExact = rightLabel === 'все исследования' ? 10000 : 0;
+                const leftTag = /^(BUTTON|A|INPUT)$/i.test(left.tagName) ? 1000 : 0;
+                const rightTag = /^(BUTTON|A|INPUT)$/i.test(right.tagName) ? 1000 : 0;
+
+                return (rightExact + rightTag - rightLabel.length) - (leftExact + leftTag - leftLabel.length);
+            });
+
+        const target = candidates[0];
+        if (!target) {
+            console.warn('Кнопка "Все исследования" не найдена. Продолжаю с текущим списком.');
+            return { clicked: false, count: getCheckboxes().length };
+        }
+
+        clickElement(target, false);
+        const count = await waitForCheckboxesToSettle();
+        console.log(`Открыт раздел "Все исследования". Текущих чек-боксов: ${count}`);
+
+        return { clicked: true, count };
+    };
+
+    const trySetPageSizeTo150 = async () => {
+        const currentCount = getCheckboxes().length;
+
+        if (currentCount >= 100) {
+            return { changed: false, reason: 'already_full', count: currentCount };
+        }
+
+        const root = document.body;
+        const pageSizes = new Set(['5', '10', '15', '20', '25', '30', '50', '100']);
+        const currentCountText = String(currentCount);
+        const editableSelector = 'input[type="number"], input[type="text"], input:not([type]), textarea, [contenteditable="true"]';
+        const isPotentialPageSizeInput = (input, allowEmpty = false) => {
+            const value = 'value' in input ? String(input.value).trim() : input.textContent.trim();
+            const marker = `${input.id || ''} ${input.name || ''} ${input.className || ''} ${input.getAttribute('aria-label') || ''}`;
+            const hasPageSizeMarker = /pagesize|page-size|size|row|limit|count|record|perpage|per-page|запис|строк|размер|колич/i.test(marker);
+
+            return isVisible(input)
+                && !input.disabled
+                && !input.readOnly
+                && isPagerArea(input, root)
+                && (pageSizes.has(value) || hasPageSizeMarker || (allowEmpty && value === ''));
+        };
+
+        const selects = Array.from(root.querySelectorAll('select'))
+            .filter((select) => isVisible(select) && !select.disabled && isPagerArea(select, root));
+
+        for (const select of selects) {
+            if (await setSelectValue(select, TARGET_PAGE_SIZE)) {
+                const count = await waitForRowsReload(currentCount);
+                return { changed: count > currentCount, reason: 'select', count };
+            }
+        }
+
+        const inputs = Array.from(root.querySelectorAll('input[type="number"], input[type="text"], input:not([type])'))
+            .filter((input) => isPotentialPageSizeInput(input));
+
+        for (const input of inputs) {
+            await setInputValue(input, TARGET_PAGE_SIZE);
+            const count = await waitForRowsReload(currentCount);
+
+            if (count > currentCount) {
+                return { changed: true, reason: 'input', count };
+            }
+        }
+
+        const clickableElements = Array.from(root.querySelectorAll('button, span, div, a, td'))
+            .filter((element) => {
+                const text = element.textContent.trim();
+                const marker = `${element.title || ''} ${element.getAttribute('aria-label') || ''} ${element.className || ''}`;
+                const isRecordsControl = /запис|record|row|pagesize|page-size/i.test(marker);
+
+                return isVisible(element)
+                    && isPagerArea(element, root)
+                    && (pageSizes.has(text) || text === currentCountText || isRecordsControl)
+                    && element.querySelectorAll(CHECKBOX_SELECTOR).length === 0;
+            })
+            .sort((left, right) => {
+                const leftRect = left.getBoundingClientRect();
+                const rightRect = right.getBoundingClientRect();
+                const leftMarker = `${left.title || ''} ${left.getAttribute('aria-label') || ''} ${left.className || ''}`;
+                const rightMarker = `${right.title || ''} ${right.getAttribute('aria-label') || ''} ${right.className || ''}`;
+                const leftPriority = /запис|record|row|pagesize|page-size/i.test(leftMarker) ? 10000 : 0;
+                const rightPriority = /запис|record|row|pagesize|page-size/i.test(rightMarker) ? 10000 : 0;
+
+                return (rightPriority + rightRect.bottom + rightRect.right) - (leftPriority + leftRect.bottom + leftRect.right);
+            });
+
+        for (const element of clickableElements) {
+            const knownVisibleEditors = new Set(Array.from(document.querySelectorAll(editableSelector)).filter(isVisible));
+            clickElement(element);
+            await sleep(200);
+
+            const active = document.activeElement;
+            if (active && /^(INPUT|TEXTAREA)$/i.test(active.tagName) && isPotentialPageSizeInput(active, true)) {
+                await setInputValue(active, TARGET_PAGE_SIZE);
+            } else {
+                const editor = Array.from(document.querySelectorAll(editableSelector))
+                    .filter((candidate) => isPotentialPageSizeInput(candidate, true))
+                    .find((candidate) => !knownVisibleEditors.has(candidate));
+
+                if (!editor) {
+                    continue;
+                }
+
+                if (/^(INPUT|TEXTAREA)$/i.test(editor.tagName)) {
+                    await setInputValue(editor, TARGET_PAGE_SIZE);
+                } else {
+                    await setEditableText(editor, TARGET_PAGE_SIZE);
+                }
+            }
+
+            const count = await waitForRowsReload(currentCount);
+            if (count > currentCount) {
+                return { changed: true, reason: 'clickable', count };
+            }
+        }
+
+        return { changed: false, reason: 'not_found', count: getCheckboxes().length };
+    };
     
+    await openAllResearches();
+
     // Проверяем количество чек-боксов
-    const allCheckboxes = document.querySelectorAll('input[name="GridResearch_SelectList_Item"]');
+    let allCheckboxes = getCheckboxes();
     console.log(`Найдено чек-боксов: ${allCheckboxes.length}`);
+
+    const pageSizeResult = await trySetPageSizeTo150();
+    if (pageSizeResult.changed) {
+        console.log(`Количество записей автоматически переключено на ${TARGET_PAGE_SIZE}. Текущих чек-боксов: ${pageSizeResult.count}`);
+        allCheckboxes = getCheckboxes();
+    } else if (pageSizeResult.reason === 'not_found') {
+        console.warn('Не удалось автоматически найти переключатель количества записей.');
+    }
     
     // Если найдено меньше 100 записей, показываем предупреждение
     if (allCheckboxes.length < 100) {
-        const warningMsg = `⚠️ Внимание! Найдено только ${allCheckboxes.length} анализов. Убедитесь, что вы установили отображение 150 записей (нажмите на цифру в правом нижнем углу, введите 150 и нажмите Enter).`;
+        const warningMsg = `⚠️ Внимание! Найдено только ${allCheckboxes.length} анализов. Автоматически выставить 150 записей не удалось. Установите отображение 150 записей вручную (нажмите на цифру в правом нижнем углу, введите 150 и нажмите Enter).`;
         console.warn(warningMsg);
         
         // Показываем предупреждение на странице
