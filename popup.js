@@ -244,6 +244,31 @@ const DELETED_DEFAULT_PROFILES_KEY = 'barsDeletedDefaultProfilesV2';
 const RESEARCH_CATALOG_STORAGE_KEY = 'barsResearchCatalogV2';
 const PROFILE_ICONS = ['🔴', '🟠', '🟡', '🫁', '⚠️', '🏥', '⭐', '🩸', '❤️', '🧪', '🦠', '🧬', '💊', '🔬', '🧫', '🩺', '🚑', '📋'];
 const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
+const RESEARCH_MATERIAL_NAMES = new Set([
+    'сыворотка крови',
+    'кровь',
+    'кровь венозная',
+    'кровь капиллярная',
+    'моча',
+    'осадок мочи',
+    'кал',
+    'мокрота',
+    'ликвор',
+    'слюна',
+    'гной',
+    'отделяемое',
+    'отделяемое из уха',
+    'отделяемое влагалища',
+    'отделяемое уретры',
+    'отделяемое женских мочеполовых органов',
+    'отделяемое из носа',
+    'плазма крови бедная тромбоцитами',
+    'жидкость плевральная',
+    'носоглоточная слизь',
+    'слизь с миндалин',
+    'мазок слизистой ротоглотки',
+    'соскоб'
+]);
 let PROFILES = loadProfiles();
 let loadedResearches = loadSavedResearches();
 let editingProfileName = null;
@@ -308,8 +333,12 @@ function refreshProfiles() {
 
 function normalizeResearchName(name, researchId) {
     const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
+    const lowerName = normalizedName.toLowerCase().replace(/\.$/, '');
 
-    if (!normalizedName || normalizedName === `Исследование ${researchId}`) {
+    if (!normalizedName
+        || normalizedName === `Исследование ${researchId}`
+        || RESEARCH_MATERIAL_NAMES.has(lowerName)
+        || /^[ab]\d{2}(?:\.\d{2,3})+(?:\.\d+)?$/i.test(lowerName)) {
         return '';
     }
 
@@ -329,7 +358,17 @@ function getResearchCatalog() {
         }, {});
     }
 
-    return savedCatalog && typeof savedCatalog === 'object' ? savedCatalog : {};
+    if (!savedCatalog || typeof savedCatalog !== 'object') {
+        return {};
+    }
+
+    return Object.entries(savedCatalog).reduce((catalog, [researchId, name]) => {
+        const normalizedName = normalizeResearchName(name, researchId);
+        if (researchId && normalizedName) {
+            catalog[researchId] = normalizedName;
+        }
+        return catalog;
+    }, {});
 }
 
 function saveResearchCatalog(catalog) {
@@ -555,12 +594,7 @@ async function openProfileEditor(profileName = null) {
     renderIconPicker();
     renderResearchList();
 
-    const catalog = getResearchCatalog();
-    const hasMissingResearchNames = Array.from(selectedResearchIds).some((researchId) => !catalog[researchId]);
-
-    if (loadedResearches.length === 0 || hasMissingResearchNames) {
-        await loadResearchesForEditor();
-    }
+    await loadResearchesForEditor();
 }
 
 function closeProfileEditor() {
@@ -958,18 +992,83 @@ async function readResearchesFromPage() {
     };
 
     const getResearchName = (checkbox, researchId) => {
-        const row = checkbox.closest('tr') || checkbox.closest('[role="row"]') || checkbox.parentElement;
-        const cells = row
-            ? Array.from(row.querySelectorAll('td, [role="gridcell"]'))
-                .map((cell) => normalizeText(cell.innerText))
-                .filter((text) => text && text !== researchId && !/^\d+$/.test(text))
-            : [];
-        const rowText = normalizeText(row ? row.innerText : '');
-        const checkboxText = normalizeText(checkbox.title || checkbox.getAttribute('aria-label') || '');
+        const MATERIAL_NAMES = new Set([
+            'сыворотка крови',
+            'кровь',
+            'кровь венозная',
+            'кровь капиллярная',
+            'моча',
+            'осадок мочи',
+            'кал',
+            'мокрота',
+            'ликвор',
+            'слюна',
+            'гной',
+            'отделяемое',
+            'отделяемое из уха',
+            'отделяемое влагалища',
+            'отделяемое уретры',
+            'отделяемое женских мочеполовых органов',
+            'отделяемое из носа',
+            'плазма крови бедная тромбоцитами',
+            'жидкость плевральная',
+            'носоглоточная слизь',
+            'слизь с миндалин',
+            'мазок слизистой ротоглотки',
+            'соскоб'
+        ]);
 
-        return cells.sort((left, right) => right.length - left.length)[0]
-            || rowText
-            || checkboxText
+        const splitText = (text) => String(text || '')
+            .split(/\r?\n|\t+/)
+            .map((part) => normalizeText(part))
+            .filter(Boolean);
+
+        const getElementTextParts = (element) => splitText(element ? element.innerText || element.textContent : '');
+
+        const isTechnicalText = (text) => {
+            const normalized = normalizeLabel(text).replace(/\.$/, '');
+
+            return !normalized
+                || normalized === researchId
+                || /^\d+$/.test(normalized)
+                || /^[ab]\d{2}(?:\.\d{2,3})+(?:\.\d+)?$/i.test(normalized)
+                || MATERIAL_NAMES.has(normalized)
+                || /^(да|нет|true|false)$/i.test(normalized);
+        };
+
+        const pickResearchName = (texts) => {
+            return texts
+                .map((text) => normalizeText(text))
+                .find((text) => text.length > 1 && text.length <= 220 && !isTechnicalText(text))
+                || '';
+        };
+
+        const row = checkbox.closest('tr') || checkbox.closest('[role="row"]') || checkbox.parentElement;
+        const cellTexts = row
+            ? Array.from(row.querySelectorAll('td, [role="gridcell"]')).flatMap(getElementTextParts)
+            : [];
+        const rowTexts = getElementTextParts(row);
+        const checkboxText = normalizeText(checkbox.title || checkbox.getAttribute('aria-label') || '');
+        const checkboxRect = checkbox.getBoundingClientRect();
+        const checkboxCenterY = checkboxRect.top + checkboxRect.height / 2;
+        const visualRowTexts = Array.from(document.querySelectorAll('td, [role="gridcell"], span, div'))
+            .filter((element) => {
+                if (!isVisible(element) || element.contains(checkbox) || checkbox.contains(element)) {
+                    return false;
+                }
+
+                const rect = element.getBoundingClientRect();
+                const verticallyAligned = checkboxCenterY >= rect.top - 3 && checkboxCenterY <= rect.bottom + 3;
+                const isRightOfCheckbox = rect.left >= checkboxRect.right - 5;
+
+                return verticallyAligned && isRightOfCheckbox;
+            })
+            .flatMap(getElementTextParts);
+
+        return pickResearchName(cellTexts)
+            || pickResearchName(rowTexts)
+            || pickResearchName(visualRowTexts)
+            || pickResearchName([checkboxText])
             || `Исследование ${researchId}`;
     };
 
