@@ -10,7 +10,7 @@ const BASE_ANALYSES = {
     "14184265605": true, // Определение антигена D системы Резус (резус-фактор)
 };
 
-const PROFILES = {
+const DEFAULT_PROFILES = {
     // ========== ОСНОВНЫЕ ПРОФИЛИ ==========
     "🔴 Острый панкреатит": {
         ...BASE_ANALYSES,
@@ -239,25 +239,776 @@ const PROFILES = {
 };
 // ==============================================
 
-// Заполняем выпадающий список профилями
-document.addEventListener('DOMContentLoaded', () => {
+const PROFILE_STORAGE_KEY = 'barsCustomProfilesV2';
+const DELETED_DEFAULT_PROFILES_KEY = 'barsDeletedDefaultProfilesV2';
+const RESEARCH_CATALOG_STORAGE_KEY = 'barsResearchCatalogV2';
+const PROFILE_ICONS = ['🔴', '🟠', '🟡', '🫁', '⚠️', '🏥', '⭐', '🩸', '❤️', '🧪', '🦠', '🧬', '💊', '🔬', '🧫', '🩺', '🚑', '📋'];
+const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
+let PROFILES = loadProfiles();
+let loadedResearches = loadSavedResearches();
+let editingProfileName = null;
+let selectedResearchIds = new Set();
+let selectedProfileIcon = PROFILE_ICONS[0];
+
+function getDefaultProfileNames() {
+    return Object.keys(DEFAULT_PROFILES);
+}
+
+function readJsonStorage(key, fallbackValue) {
+    try {
+        const rawValue = localStorage.getItem(key);
+        return rawValue ? JSON.parse(rawValue) : fallbackValue;
+    } catch (error) {
+        console.warn(`Не удалось прочитать настройки ${key}`, error);
+        return fallbackValue;
+    }
+}
+
+function writeJsonStorage(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+}
+
+function getCustomProfiles() {
+    return readJsonStorage(PROFILE_STORAGE_KEY, {});
+}
+
+function saveCustomProfiles(customProfiles) {
+    writeJsonStorage(PROFILE_STORAGE_KEY, customProfiles);
+}
+
+function getDeletedDefaultProfiles() {
+    return new Set(readJsonStorage(DELETED_DEFAULT_PROFILES_KEY, []));
+}
+
+function saveDeletedDefaultProfiles(deletedProfiles) {
+    writeJsonStorage(DELETED_DEFAULT_PROFILES_KEY, Array.from(deletedProfiles));
+}
+
+function loadProfiles() {
+    const deletedDefaultProfiles = getDeletedDefaultProfiles();
+    const customProfiles = getCustomProfiles();
+    const profiles = {};
+
+    for (const profileName of getDefaultProfileNames()) {
+        if (!deletedDefaultProfiles.has(profileName)) {
+            profiles[profileName] = { ...DEFAULT_PROFILES[profileName] };
+        }
+    }
+
+    for (const [profileName, analyses] of Object.entries(customProfiles)) {
+        profiles[profileName] = { ...analyses };
+    }
+
+    return profiles;
+}
+
+function refreshProfiles() {
+    PROFILES = loadProfiles();
+}
+
+function normalizeResearchName(name, researchId) {
+    const normalizedName = String(name || '').replace(/\s+/g, ' ').trim();
+
+    if (!normalizedName || normalizedName === `Исследование ${researchId}`) {
+        return '';
+    }
+
+    return normalizedName;
+}
+
+function getResearchCatalog() {
+    const savedCatalog = readJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, {});
+
+    if (Array.isArray(savedCatalog)) {
+        return savedCatalog.reduce((catalog, research) => {
+            const name = normalizeResearchName(research.name, research.id);
+            if (research.id && name) {
+                catalog[research.id] = name;
+            }
+            return catalog;
+        }, {});
+    }
+
+    return savedCatalog && typeof savedCatalog === 'object' ? savedCatalog : {};
+}
+
+function saveResearchCatalog(catalog) {
+    writeJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, catalog);
+}
+
+function loadSavedResearches() {
+    const catalog = getResearchCatalog();
+
+    return Object.entries(catalog)
+        .map(([id, name]) => ({ id, name }))
+        .sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+}
+
+function mergeResearchCatalog(researches) {
+    const catalog = getResearchCatalog();
+
+    for (const research of researches) {
+        const name = normalizeResearchName(research.name, research.id);
+        if (research.id && name) {
+            catalog[research.id] = name;
+        }
+    }
+
+    saveResearchCatalog(catalog);
+    loadedResearches = loadSavedResearches();
+
+    return loadedResearches;
+}
+
+function splitProfileTitle(profileName) {
+    const parts = profileName.trim().split(/\s+/);
+    const firstPart = parts[0] || PROFILE_ICONS[0];
+
+    if (PROFILE_ICONS.includes(firstPart)) {
+        return {
+            icon: firstPart,
+            name: parts.slice(1).join(' ') || profileName.trim()
+        };
+    }
+
+    return {
+        icon: PROFILE_ICONS[0],
+        name: profileName.trim()
+    };
+}
+
+function makeProfileTitle(icon, name) {
+    return `${icon} ${name.trim()}`;
+}
+
+function setStatus(message, color = '#4CAF50') {
+    const statusDiv = document.getElementById('status');
+    statusDiv.textContent = message;
+    statusDiv.style.color = color;
+}
+
+function populateProfileSelect(preferredProfile = '') {
     const select = document.getElementById('profileSelect');
-    
+    const currentValue = preferredProfile || select.value || localStorage.getItem('lastSelectedProfile') || '';
+
     while (select.options.length > 1) {
         select.remove(1);
     }
-    
+
     for (const profileName in PROFILES) {
         const option = document.createElement('option');
         option.value = profileName;
         option.textContent = profileName;
         select.appendChild(option);
     }
-    
-    const savedProfile = localStorage.getItem('lastSelectedProfile');
-    if (savedProfile && PROFILES[savedProfile]) {
-        select.value = savedProfile;
+
+    if (currentValue && PROFILES[currentValue]) {
+        select.value = currentValue;
+    } else {
+        select.value = '';
     }
+}
+
+function renderProfileManagerList() {
+    const list = document.getElementById('profileManagerList');
+    list.textContent = '';
+
+    for (const profileName of Object.keys(PROFILES)) {
+        const row = document.createElement('div');
+        row.className = 'profile-row';
+
+        const name = document.createElement('span');
+        name.className = 'profile-row-name';
+        name.textContent = profileName;
+
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'small-btn';
+        editButton.textContent = 'Ред.';
+        editButton.addEventListener('click', () => openProfileEditor(profileName));
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'small-btn danger-mini';
+        deleteButton.textContent = 'Удалить';
+        deleteButton.addEventListener('click', () => deleteProfile(profileName));
+
+        row.append(name, editButton, deleteButton);
+        list.appendChild(row);
+    }
+}
+
+function renderIconPicker() {
+    const picker = document.getElementById('iconPicker');
+    picker.textContent = '';
+
+    for (const icon of PROFILE_ICONS) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = icon === selectedProfileIcon ? 'icon-choice selected' : 'icon-choice';
+        button.textContent = icon;
+        button.addEventListener('click', () => {
+            selectedProfileIcon = icon;
+            renderIconPicker();
+        });
+        picker.appendChild(button);
+    }
+}
+
+function ensureSelectedResearchesInList() {
+    const existingIds = new Set(loadedResearches.map((research) => research.id));
+    const catalog = getResearchCatalog();
+
+    for (const researchId of selectedResearchIds) {
+        if (!existingIds.has(researchId)) {
+            loadedResearches.push({
+                id: researchId,
+                name: catalog[researchId] || `Исследование ${researchId}`
+            });
+        }
+    }
+
+    loadedResearches.sort((left, right) => left.name.localeCompare(right.name, 'ru'));
+}
+
+function renderResearchList() {
+    const list = document.getElementById('researchList');
+    const counter = document.getElementById('selectedResearchCounter');
+    const searchValue = document.getElementById('researchSearch').value.trim().toLowerCase();
+
+    ensureSelectedResearchesInList();
+    list.textContent = '';
+    counter.textContent = `Выбрано: ${selectedResearchIds.size}`;
+
+    const filteredResearches = loadedResearches.filter((research) => {
+        const haystack = `${research.name} ${research.id}`.toLowerCase();
+        return haystack.includes(searchValue);
+    });
+
+    if (filteredResearches.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'Исследования не найдены';
+        list.appendChild(empty);
+        return;
+    }
+
+    for (const research of filteredResearches) {
+        const label = document.createElement('label');
+        label.className = 'research-row';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = selectedResearchIds.has(research.id);
+        checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+                selectedResearchIds.add(research.id);
+            } else {
+                selectedResearchIds.delete(research.id);
+            }
+            counter.textContent = `Выбрано: ${selectedResearchIds.size}`;
+        });
+
+        const text = document.createElement('span');
+        text.textContent = research.name;
+
+        label.append(checkbox, text);
+        list.appendChild(label);
+    }
+}
+
+function openSettingsPanel() {
+    document.getElementById('settingsPanel').classList.remove('hidden');
+    renderProfileManagerList();
+}
+
+function closeSettingsPanel() {
+    document.getElementById('settingsPanel').classList.add('hidden');
+    closeProfileEditor();
+}
+
+async function openProfileEditor(profileName = null) {
+    const editor = document.getElementById('profileEditor');
+    const title = document.getElementById('editorTitle');
+    const nameInput = document.getElementById('profileNameInput');
+    const saveButton = document.getElementById('saveProfile');
+
+    editingProfileName = profileName;
+
+    if (profileName) {
+        const profileTitle = splitProfileTitle(profileName);
+        selectedProfileIcon = profileTitle.icon;
+        selectedResearchIds = new Set(Object.keys(PROFILES[profileName] || {}));
+        nameInput.value = profileTitle.name;
+        title.textContent = 'Редактирование профиля';
+        saveButton.textContent = 'Сохранить назначение';
+    } else {
+        selectedProfileIcon = PROFILE_ICONS[0];
+        selectedResearchIds = new Set();
+        nameInput.value = '';
+        title.textContent = 'Новое назначение';
+        saveButton.textContent = 'Добавить назначение';
+    }
+
+    document.getElementById('researchSearch').value = '';
+    editor.classList.remove('hidden');
+    renderIconPicker();
+    renderResearchList();
+
+    const catalog = getResearchCatalog();
+    const hasMissingResearchNames = Array.from(selectedResearchIds).some((researchId) => !catalog[researchId]);
+
+    if (loadedResearches.length === 0 || hasMissingResearchNames) {
+        await loadResearchesForEditor();
+    }
+}
+
+function closeProfileEditor() {
+    editingProfileName = null;
+    selectedResearchIds = new Set();
+    document.getElementById('profileEditor').classList.add('hidden');
+}
+
+function saveProfileFromEditor() {
+    const nameInput = document.getElementById('profileNameInput');
+    const profileName = nameInput.value.trim();
+
+    if (!profileName) {
+        setStatus('❌ Укажите название назначения', '#f44336');
+        return;
+    }
+
+    if (selectedResearchIds.size === 0) {
+        setStatus('❌ Выберите хотя бы одно исследование', '#f44336');
+        return;
+    }
+
+    const newTitle = makeProfileTitle(selectedProfileIcon, profileName);
+    const customProfiles = getCustomProfiles();
+    const deletedDefaultProfiles = getDeletedDefaultProfiles();
+    const analyses = {};
+
+    if (PROFILES[newTitle] && editingProfileName !== newTitle && !confirm(`Назначение "${newTitle}" уже существует. Заменить его?`)) {
+        return;
+    }
+
+    for (const researchId of selectedResearchIds) {
+        analyses[researchId] = true;
+    }
+
+    mergeResearchCatalog(loadedResearches);
+
+    if (editingProfileName && editingProfileName !== newTitle) {
+        delete customProfiles[editingProfileName];
+
+        if (DEFAULT_PROFILES[editingProfileName]) {
+            deletedDefaultProfiles.add(editingProfileName);
+        }
+    }
+
+    customProfiles[newTitle] = analyses;
+    saveCustomProfiles(customProfiles);
+    saveDeletedDefaultProfiles(deletedDefaultProfiles);
+    refreshProfiles();
+    populateProfileSelect(newTitle);
+    renderProfileManagerList();
+    closeProfileEditor();
+    setStatus(`✅ Назначение "${newTitle}" сохранено`);
+}
+
+function deleteProfile(profileName) {
+    if (!confirm(`Удалить назначение "${profileName}"?`)) {
+        return;
+    }
+
+    const customProfiles = getCustomProfiles();
+    const deletedDefaultProfiles = getDeletedDefaultProfiles();
+
+    delete customProfiles[profileName];
+
+    if (DEFAULT_PROFILES[profileName]) {
+        deletedDefaultProfiles.add(profileName);
+    }
+
+    saveCustomProfiles(customProfiles);
+    saveDeletedDefaultProfiles(deletedDefaultProfiles);
+    refreshProfiles();
+    populateProfileSelect();
+    renderProfileManagerList();
+    closeProfileEditor();
+    setStatus(`✅ Назначение "${profileName}" удалено`);
+}
+
+async function loadResearchesForEditor() {
+    const loadButton = document.getElementById('loadResearches');
+    const loadStatus = document.getElementById('researchLoadStatus');
+
+    loadButton.disabled = true;
+    loadStatus.textContent = 'Загрузка исследований со страницы БАРС...';
+
+    return new Promise((resolve) => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs || !tabs[0]) {
+                loadStatus.textContent = 'Активная вкладка не найдена';
+                loadButton.disabled = false;
+                renderResearchList();
+                resolve();
+                return;
+            }
+
+            chrome.scripting.executeScript({
+                target: { tabId: tabs[0].id },
+                func: readResearchesFromPage
+            }, (results) => {
+                loadButton.disabled = false;
+
+                if (chrome.runtime.lastError) {
+                    loadStatus.textContent = `Не удалось считать исследования: ${chrome.runtime.lastError.message}`;
+                    renderResearchList();
+                    resolve();
+                    return;
+                }
+
+                const result = results && results[0] && results[0].result;
+                const pageResearches = result && Array.isArray(result.researches) ? result.researches : [];
+
+                if (pageResearches.length) {
+                    mergeResearchCatalog(pageResearches);
+                } else {
+                    loadedResearches = loadSavedResearches();
+                }
+
+                loadStatus.textContent = loadedResearches.length
+                    ? `Загружено исследований: ${loadedResearches.length}`
+                    : 'Исследования не найдены. Откройте страницу назначений в БАРС.';
+
+                renderResearchList();
+                resolve();
+            });
+        });
+    });
+}
+
+async function readResearchesFromPage() {
+    const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
+    const TARGET_PAGE_SIZE = 150;
+
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    const getCheckboxes = () => Array.from(document.querySelectorAll(CHECKBOX_SELECTOR));
+    const normalizeText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+    const normalizeLabel = (value) => normalizeText(value).toLowerCase();
+
+    const isVisible = (element) => {
+        if (!element || !element.isConnected) {
+            return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+            && rect.height > 0
+            && style.display !== 'none'
+            && style.visibility !== 'hidden'
+            && style.opacity !== '0';
+    };
+
+    const getElementLabel = (element) => normalizeLabel([
+        element.textContent,
+        element.value,
+        element.title,
+        element.getAttribute('aria-label')
+    ].filter(Boolean).join(' '));
+
+    const clickElement = (element, useDoubleClick = true) => {
+        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        if (useDoubleClick) {
+            element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+        }
+    };
+
+    const dispatchValueEvents = (element) => {
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        element.dispatchEvent(new KeyboardEvent('keydown', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.dispatchEvent(new KeyboardEvent('keypress', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.dispatchEvent(new KeyboardEvent('keyup', {
+            bubbles: true,
+            cancelable: true,
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13
+        }));
+        element.blur();
+    };
+
+    const isPagerArea = (element) => {
+        const rect = element.getBoundingClientRect();
+        const inBottomPart = rect.top >= window.innerHeight * 0.35 || rect.bottom >= window.innerHeight * 0.5;
+        const inRightPart = rect.left >= window.innerWidth * 0.3;
+
+        return inBottomPart && inRightPart;
+    };
+
+    const waitForRowsReload = async (previousCount) => {
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < 7000) {
+            await sleep(250);
+
+            const currentCount = getCheckboxes().length;
+            if (currentCount >= 100 || currentCount > previousCount) {
+                return currentCount;
+            }
+        }
+
+        return getCheckboxes().length;
+    };
+
+    const waitForCheckboxesToSettle = async () => {
+        const startedAt = Date.now();
+        let lastCount = getCheckboxes().length;
+        let stableSince = Date.now();
+
+        while (Date.now() - startedAt < 7000) {
+            await sleep(250);
+
+            const currentCount = getCheckboxes().length;
+            if (currentCount !== lastCount) {
+                lastCount = currentCount;
+                stableSince = Date.now();
+            }
+
+            if (currentCount > 0 && Date.now() - startedAt >= 1200 && Date.now() - stableSince >= 500) {
+                return currentCount;
+            }
+        }
+
+        return getCheckboxes().length;
+    };
+
+    const setInputValue = async (input, value) => {
+        input.focus();
+
+        const valuePrototype = input instanceof window.HTMLTextAreaElement
+            ? window.HTMLTextAreaElement.prototype
+            : window.HTMLInputElement.prototype;
+        const nativeSetter = Object.getOwnPropertyDescriptor(valuePrototype, 'value')?.set;
+        if (nativeSetter) {
+            nativeSetter.call(input, String(value));
+        } else {
+            input.value = String(value);
+        }
+
+        dispatchValueEvents(input);
+        await sleep(150);
+    };
+
+    const setSelectValue = async (select, value) => {
+        const targetOption = Array.from(select.options).find((option) => {
+            const optionValue = option.value.trim();
+            const optionText = option.textContent.trim();
+            return optionValue === String(value) || optionText === String(value);
+        });
+
+        if (!targetOption) {
+            return false;
+        }
+
+        select.value = targetOption.value;
+        dispatchValueEvents(select);
+        await sleep(150);
+        return true;
+    };
+
+    const openAllResearches = async () => {
+        const target = Array.from(document.querySelectorAll('button, a, span, div, td, input[type="button"], input[type="submit"]'))
+            .filter((element) => isVisible(element)
+                && getElementLabel(element).includes('все исследования')
+                && element.querySelectorAll(CHECKBOX_SELECTOR).length === 0)
+            .sort((left, right) => {
+                const leftLabel = getElementLabel(left);
+                const rightLabel = getElementLabel(right);
+                const leftExact = leftLabel === 'все исследования' ? 10000 : 0;
+                const rightExact = rightLabel === 'все исследования' ? 10000 : 0;
+
+                return (rightExact - rightLabel.length) - (leftExact - leftLabel.length);
+            })[0];
+
+        if (target) {
+            clickElement(target, false);
+            await waitForCheckboxesToSettle();
+        }
+    };
+
+    const trySetPageSizeTo150 = async () => {
+        const currentCount = getCheckboxes().length;
+
+        if (currentCount >= 100) {
+            return currentCount;
+        }
+
+        const pageSizes = new Set(['5', '10', '15', '20', '25', '30', '50', '100']);
+        const currentCountText = String(currentCount);
+        const editableSelector = 'input[type="number"], input[type="text"], input:not([type]), textarea, [contenteditable="true"]';
+        const isPotentialPageSizeInput = (input, allowEmpty = false) => {
+            const value = 'value' in input ? String(input.value).trim() : input.textContent.trim();
+            const marker = `${input.id || ''} ${input.name || ''} ${input.className || ''} ${input.getAttribute('aria-label') || ''}`;
+            const hasPageSizeMarker = /pagesize|page-size|size|row|limit|count|record|perpage|per-page|запис|строк|размер|колич/i.test(marker);
+
+            return isVisible(input)
+                && !input.disabled
+                && !input.readOnly
+                && isPagerArea(input)
+                && (pageSizes.has(value) || hasPageSizeMarker || (allowEmpty && value === ''));
+        };
+
+        const selects = Array.from(document.querySelectorAll('select'))
+            .filter((select) => isVisible(select) && !select.disabled && isPagerArea(select));
+
+        for (const select of selects) {
+            if (await setSelectValue(select, TARGET_PAGE_SIZE)) {
+                return waitForRowsReload(currentCount);
+            }
+        }
+
+        const inputs = Array.from(document.querySelectorAll('input[type="number"], input[type="text"], input:not([type])'))
+            .filter((input) => isPotentialPageSizeInput(input));
+
+        for (const input of inputs) {
+            await setInputValue(input, TARGET_PAGE_SIZE);
+            const count = await waitForRowsReload(currentCount);
+
+            if (count > currentCount) {
+                return count;
+            }
+        }
+
+        const clickableElements = Array.from(document.querySelectorAll('button, span, div, a, td'))
+            .filter((element) => {
+                const text = element.textContent.trim();
+                const marker = `${element.title || ''} ${element.getAttribute('aria-label') || ''} ${element.className || ''}`;
+                const isRecordsControl = /запис|record|row|pagesize|page-size/i.test(marker);
+
+                return isVisible(element)
+                    && isPagerArea(element)
+                    && (pageSizes.has(text) || text === currentCountText || isRecordsControl)
+                    && element.querySelectorAll(CHECKBOX_SELECTOR).length === 0;
+            })
+            .sort((left, right) => {
+                const leftRect = left.getBoundingClientRect();
+                const rightRect = right.getBoundingClientRect();
+                const leftMarker = `${left.title || ''} ${left.getAttribute('aria-label') || ''} ${left.className || ''}`;
+                const rightMarker = `${right.title || ''} ${right.getAttribute('aria-label') || ''} ${right.className || ''}`;
+                const leftPriority = /запис|record|row|pagesize|page-size/i.test(leftMarker) ? 10000 : 0;
+                const rightPriority = /запис|record|row|pagesize|page-size/i.test(rightMarker) ? 10000 : 0;
+
+                return (rightPriority + rightRect.bottom + rightRect.right) - (leftPriority + leftRect.bottom + leftRect.right);
+            });
+
+        for (const element of clickableElements) {
+            const knownVisibleEditors = new Set(Array.from(document.querySelectorAll(editableSelector)).filter(isVisible));
+            clickElement(element);
+            await sleep(200);
+
+            const active = document.activeElement;
+            if (active && /^(INPUT|TEXTAREA)$/i.test(active.tagName) && isPotentialPageSizeInput(active, true)) {
+                await setInputValue(active, TARGET_PAGE_SIZE);
+            } else {
+                const editor = Array.from(document.querySelectorAll(editableSelector))
+                    .filter((candidate) => isPotentialPageSizeInput(candidate, true))
+                    .find((candidate) => !knownVisibleEditors.has(candidate));
+
+                if (!editor) {
+                    continue;
+                }
+
+                if (/^(INPUT|TEXTAREA)$/i.test(editor.tagName)) {
+                    await setInputValue(editor, TARGET_PAGE_SIZE);
+                } else {
+                    editor.textContent = String(TARGET_PAGE_SIZE);
+                    dispatchValueEvents(editor);
+                }
+            }
+
+            const count = await waitForRowsReload(currentCount);
+            if (count > currentCount) {
+                return count;
+            }
+        }
+
+        return getCheckboxes().length;
+    };
+
+    const getResearchName = (checkbox, researchId) => {
+        const row = checkbox.closest('tr') || checkbox.closest('[role="row"]') || checkbox.parentElement;
+        const cells = row
+            ? Array.from(row.querySelectorAll('td, [role="gridcell"]'))
+                .map((cell) => normalizeText(cell.innerText))
+                .filter((text) => text && text !== researchId && !/^\d+$/.test(text))
+            : [];
+        const rowText = normalizeText(row ? row.innerText : '');
+        const checkboxText = normalizeText(checkbox.title || checkbox.getAttribute('aria-label') || '');
+
+        return cells.sort((left, right) => right.length - left.length)[0]
+            || rowText
+            || checkboxText
+            || `Исследование ${researchId}`;
+    };
+
+    await openAllResearches();
+    await trySetPageSizeTo150();
+    await waitForCheckboxesToSettle();
+
+    const byId = new Map();
+    for (const checkbox of getCheckboxes()) {
+        const researchId = checkbox.getAttribute('item_value');
+        if (!researchId || byId.has(researchId)) {
+            continue;
+        }
+
+        byId.set(researchId, {
+            id: researchId,
+            name: getResearchName(checkbox, researchId)
+        });
+    }
+
+    return {
+        researches: Array.from(byId.values()).sort((left, right) => left.name.localeCompare(right.name, 'ru')),
+        count: byId.size
+    };
+}
+
+// Заполняем выпадающий список профилями
+document.addEventListener('DOMContentLoaded', () => {
+    refreshProfiles();
+    populateProfileSelect();
+    renderProfileManagerList();
+
+    document.getElementById('settingsToggle').addEventListener('click', openSettingsPanel);
+    document.getElementById('closeSettings').addEventListener('click', closeSettingsPanel);
+    document.getElementById('addProfile').addEventListener('click', () => openProfileEditor());
+    document.getElementById('cancelEdit').addEventListener('click', closeProfileEditor);
+    document.getElementById('saveProfile').addEventListener('click', saveProfileFromEditor);
+    document.getElementById('loadResearches').addEventListener('click', loadResearchesForEditor);
+    document.getElementById('researchSearch').addEventListener('input', renderResearchList);
 });
 
 // Обработчик кнопки "Заполнить форму"
