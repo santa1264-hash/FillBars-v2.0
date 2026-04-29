@@ -1228,6 +1228,65 @@ async function fillForm(formData, profileName) {
             && style.opacity !== '0';
     };
 
+    const findCheckboxByItemValue = (itemValue) => {
+        return getCheckboxes().find((checkbox) => checkbox.getAttribute('item_value') === itemValue);
+    };
+
+    const clickCheckboxLikeUser = (checkbox) => {
+        checkbox.scrollIntoView({ block: 'center', inline: 'nearest' });
+        if (typeof checkbox.focus === 'function') {
+            checkbox.focus();
+        }
+
+        checkbox.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+        checkbox.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }));
+        checkbox.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+        checkbox.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+        checkbox.click();
+    };
+
+    const waitForBarsToProcessSelection = async () => {
+        await sleep(220);
+    };
+
+    const setCheckboxStateThroughBars = async (itemValue, desiredState) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+            const checkbox = findCheckboxByItemValue(itemValue);
+
+            if (!checkbox) {
+                console.warn(`Анализ не найден на странице: ${itemValue}`);
+                return false;
+            }
+
+            if (checkbox.checked === desiredState) {
+                return true;
+            }
+
+            clickCheckboxLikeUser(checkbox);
+            await waitForBarsToProcessSelection();
+        }
+
+        return !!findCheckboxByItemValue(itemValue)?.checked === desiredState;
+    };
+
+    const resyncSelectedCheckboxThroughBars = async (itemValue) => {
+        const checkbox = findCheckboxByItemValue(itemValue);
+
+        if (!checkbox) {
+            console.warn(`Анализ не найден на странице: ${itemValue}`);
+            return false;
+        }
+
+        if (checkbox.checked) {
+            const isCleared = await setCheckboxStateThroughBars(itemValue, false);
+            if (!isCleared) {
+                return false;
+            }
+        }
+
+        return setCheckboxStateThroughBars(itemValue, true);
+    };
+
     const dispatchValueEvents = (element) => {
         element.dispatchEvent(new Event('input', { bubbles: true }));
         element.dispatchEvent(new Event('change', { bubbles: true }));
@@ -1544,25 +1603,32 @@ async function fillForm(formData, profileName) {
         setTimeout(() => notification.remove(), 8000);
     }
     
-    // Проставляем чек-боксы
-    allCheckboxes.forEach((checkbox) => {
-        const itemValue = checkbox.getAttribute('item_value');
-        
-        if (itemValue && formData.hasOwnProperty(itemValue)) {
-            const shouldBeChecked = formData[itemValue];
-            const isChecked = checkbox.checked;
-            
-            if (shouldBeChecked === true && !isChecked) {
-                checkbox.click();
-                filledCount++;
-                console.log(`✓ Отмечен анализ: ${itemValue}`);
-            } else if (shouldBeChecked === false && isChecked) {
-                checkbox.click();
-                filledCount++;
-                console.log(`✗ Снят анализ: ${itemValue}`);
+    const targetItemValues = allCheckboxes
+        .map((checkbox) => checkbox.getAttribute('item_value'))
+        .filter((itemValue) => itemValue && formData.hasOwnProperty(itemValue));
+
+    // Проставляем чек-боксы последовательно, чтобы БАРС успевал обновить нижний список выбранных исследований.
+    for (const itemValue of targetItemValues) {
+        const shouldBeChecked = formData[itemValue];
+
+        if (shouldBeChecked === true) {
+            const isSelected = await resyncSelectedCheckboxThroughBars(itemValue);
+            if (!isSelected) {
+                console.warn(`Не удалось отметить анализ: ${itemValue}`);
+                continue;
             }
+            filledCount++;
+            console.log(`✓ Отмечен анализ: ${itemValue}`);
+        } else if (shouldBeChecked === false) {
+            const isCleared = await setCheckboxStateThroughBars(itemValue, false);
+            if (!isCleared) {
+                console.warn(`Не удалось снять анализ: ${itemValue}`);
+                continue;
+            }
+            filledCount++;
+            console.log(`✗ Снят анализ: ${itemValue}`);
         }
-    });
+    }
     
     const message = `Профиль "${profileName}": обработано ${filledCount} анализов (всего на странице: ${allCheckboxes.length})`;
     console.log(message);
