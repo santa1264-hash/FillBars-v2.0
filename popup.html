@@ -136,6 +136,51 @@
             font-weight: 700;
             color: #333;
         }
+        .scenario-settings {
+            border: 1px solid #e2e2e2;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #fafafa;
+        }
+        .scenario-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .scenario-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #333;
+        }
+        .scenario-current {
+            font-size: 12px;
+            font-weight: 700;
+            color: #2e7d32;
+            text-align: right;
+        }
+        .scenario-slider {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+        .scenario-slider input[type="range"] {
+            grid-column: 1 / -1;
+            width: 100%;
+            margin: 0;
+            accent-color: #4CAF50;
+            cursor: pointer;
+        }
+        .scenario-label {
+            font-size: 11px;
+            color: #777;
+        }
+        .scenario-label.right {
+            text-align: right;
+        }
         .profile-list {
             max-height: 170px;
             overflow-y: auto;
@@ -329,8 +374,19 @@
 
     <div id="settingsPanel" class="settings-panel hidden">
         <div class="settings-header">
-            <div class="settings-title">Профили назначений</div>
+            <div class="settings-title">Настройки и профили</div>
             <button id="closeSettings" class="small-btn secondary-btn" type="button">Закрыть</button>
+        </div>
+        <div class="scenario-settings">
+            <div class="scenario-header">
+                <div class="scenario-title">Этап выполнения</div>
+                <div id="assignmentStageText" class="scenario-current"></div>
+            </div>
+            <div class="scenario-slider">
+                <input id="assignmentStageSlider" type="range" min="0" max="1" step="1">
+                <div class="scenario-label">Только анализы</div>
+                <div class="scenario-label right">Кабинеты и срочно</div>
+            </div>
         </div>
         <div id="profileManagerList" class="profile-list"></div>
         <button id="addProfile" type="button">➕ Добавить назначение</button>

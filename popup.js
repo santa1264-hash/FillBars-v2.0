@@ -242,6 +242,9 @@ const DEFAULT_PROFILES = {
 const PROFILE_STORAGE_KEY = 'barsCustomProfilesV2';
 const DELETED_DEFAULT_PROFILES_KEY = 'barsDeletedDefaultProfilesV2';
 const RESEARCH_CATALOG_STORAGE_KEY = 'barsResearchCatalogV2';
+const ASSIGNMENT_STAGE_STORAGE_KEY = 'barsAssignmentStageV1';
+const ASSIGNMENT_STAGE_ANALYSES = 'analyses';
+const ASSIGNMENT_STAGE_SCHEDULE = 'schedule';
 const PROFILE_ICONS = ['🔴', '🟠', '🟡', '🫁', '⚠️', '🏥', '⭐', '🩸', '❤️', '🧪', '🦠', '🧬', '💊', '🔬', '🧫', '🩺', '🚑', '📋'];
 const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
 const RESEARCH_MATERIAL_NAMES = new Set([
@@ -373,6 +376,29 @@ function getResearchCatalog() {
 
 function saveResearchCatalog(catalog) {
     writeJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, catalog);
+}
+
+function getAssignmentStage() {
+    const stage = localStorage.getItem(ASSIGNMENT_STAGE_STORAGE_KEY);
+    return stage === ASSIGNMENT_STAGE_ANALYSES ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
+}
+
+function saveAssignmentStage(stage) {
+    const normalizedStage = stage === ASSIGNMENT_STAGE_ANALYSES ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
+    localStorage.setItem(ASSIGNMENT_STAGE_STORAGE_KEY, normalizedStage);
+    return normalizedStage;
+}
+
+function updateAssignmentStageUi(stage = getAssignmentStage()) {
+    const slider = document.getElementById('assignmentStageSlider');
+    const label = document.getElementById('assignmentStageText');
+
+    if (!slider || !label) {
+        return;
+    }
+
+    slider.value = stage === ASSIGNMENT_STAGE_ANALYSES ? '0' : '1';
+    label.textContent = stage === ASSIGNMENT_STAGE_ANALYSES ? 'Только анализы' : 'Кабинеты и срочно';
 }
 
 function loadSavedResearches() {
@@ -755,11 +781,28 @@ async function readResearchesFromPage() {
     ].filter(Boolean).join(' '));
 
     const clickElement = (element, useDoubleClick = true) => {
-        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        const rect = element.getBoundingClientRect();
+        const clientX = rect.left + Math.max(1, rect.width / 2);
+        const clientY = rect.top + Math.max(1, rect.height / 2);
+        const makeMouseEvent = (type) => new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX,
+            clientY,
+            screenX: window.screenX + clientX,
+            screenY: window.screenY + clientY,
+            button: 0,
+            buttons: type === 'mouseup' ? 0 : 1
+        });
+
+        element.dispatchEvent(makeMouseEvent('mouseover'));
+        element.dispatchEvent(makeMouseEvent('mousemove'));
+        element.dispatchEvent(makeMouseEvent('mousedown'));
+        element.dispatchEvent(makeMouseEvent('mouseup'));
+        element.dispatchEvent(makeMouseEvent('click'));
         if (useDoubleClick) {
-            element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+            element.dispatchEvent(makeMouseEvent('dblclick'));
         }
     };
 
@@ -1100,6 +1143,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshProfiles();
     populateProfileSelect();
     renderProfileManagerList();
+    updateAssignmentStageUi();
 
     document.getElementById('settingsToggle').addEventListener('click', openSettingsPanel);
     document.getElementById('closeSettings').addEventListener('click', closeSettingsPanel);
@@ -1108,6 +1152,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('saveProfile').addEventListener('click', saveProfileFromEditor);
     document.getElementById('loadResearches').addEventListener('click', loadResearchesForEditor);
     document.getElementById('researchSearch').addEventListener('input', renderResearchList);
+    document.getElementById('assignmentStageSlider').addEventListener('input', (event) => {
+        const stage = event.target.value === '0' ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
+        updateAssignmentStageUi(saveAssignmentStage(stage));
+    });
 });
 
 // Обработчик кнопки "Заполнить форму"
@@ -1136,6 +1184,7 @@ document.getElementById('fillForm').addEventListener('click', () => {
     localStorage.setItem('lastSelectedProfile', selectedProfile);
     
     const formData = PROFILES[selectedProfile];
+    const assignmentStage = getAssignmentStage();
     statusDiv.textContent = '⏳ Заполнение...';
     statusDiv.style.color = '#ff9800';
     fillButton.disabled = true;
@@ -1151,7 +1200,7 @@ document.getElementById('fillForm').addEventListener('click', () => {
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
             func: fillForm,
-            args: [formData, selectedProfile]
+            args: [formData, selectedProfile, assignmentStage]
         }, (results) => {
             if (chrome.runtime.lastError) {
                 statusDiv.textContent = `❌ Ошибка: ${chrome.runtime.lastError.message}`;
@@ -1178,7 +1227,7 @@ document.getElementById('closePopup').addEventListener('click', () => {
 // ==============================================
 // ФУНКЦИЯ ЗАПОЛНЕНИЯ ФОРМЫ
 // ==============================================
-async function fillForm(formData, profileName) {
+async function fillForm(formData, profileName, assignmentStage = 'schedule') {
     console.log("╔════════════════════════════════════════════════════════════╗");
     console.log("║  МИС БАРС - Автоматическое назначение анализов           ║");
     console.log("║  Разработчик: MorozovRV                                   ║");
@@ -1190,6 +1239,11 @@ async function fillForm(formData, profileName) {
 
     const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
     const TARGET_PAGE_SIZE = 150;
+    const ASSIGNMENT_STAGE_ANALYSES = 'analyses';
+    const ASSIGNMENT_STAGE_SCHEDULE = 'schedule';
+    const normalizedAssignmentStage = assignmentStage === ASSIGNMENT_STAGE_ANALYSES
+        ? ASSIGNMENT_STAGE_ANALYSES
+        : ASSIGNMENT_STAGE_SCHEDULE;
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1205,11 +1259,28 @@ async function fillForm(formData, profileName) {
     ].filter(Boolean).join(' '));
 
     const clickElement = (element, useDoubleClick = true) => {
-        element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-        element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-        element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+        const rect = element.getBoundingClientRect();
+        const clientX = rect.left + Math.max(1, rect.width / 2);
+        const clientY = rect.top + Math.max(1, rect.height / 2);
+        const makeMouseEvent = (type) => new MouseEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            view: window,
+            clientX,
+            clientY,
+            screenX: window.screenX + clientX,
+            screenY: window.screenY + clientY,
+            button: 0,
+            buttons: type === 'mouseup' ? 0 : 1
+        });
+
+        element.dispatchEvent(makeMouseEvent('mouseover'));
+        element.dispatchEvent(makeMouseEvent('mousemove'));
+        element.dispatchEvent(makeMouseEvent('mousedown'));
+        element.dispatchEvent(makeMouseEvent('mouseup'));
+        element.dispatchEvent(makeMouseEvent('click'));
         if (useDoubleClick) {
-            element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, view: window }));
+            element.dispatchEvent(makeMouseEvent('dblclick'));
         }
     };
 
@@ -1562,6 +1633,1123 @@ async function fillForm(formData, profileName) {
 
         return { changed: false, reason: 'not_found', count: getCheckboxes().length };
     };
+
+    const ASSIGNMENT_CABINET_LABEL = 'лаборатория амурск';
+    const DEBUG_LOG_KEY = '__FillBARS_DEBUG_LOGS';
+    const DEBUG_LOG_NODE_ID = 'fillbars-debug-logs';
+    const DEBUG_LOG_STORAGE_KEY = 'FillBARS.debugLogs';
+
+    window[DEBUG_LOG_KEY] = [];
+
+    const publishDebugLogs = () => {
+        const logs = window[DEBUG_LOG_KEY] || [];
+        const payload = JSON.stringify(logs, null, 2);
+
+        try {
+            sessionStorage.setItem(DEBUG_LOG_STORAGE_KEY, payload);
+        } catch (error) {
+            // Storage can be blocked by the host page; the DOM holder below is the fallback.
+        }
+
+        try {
+            let holder = document.getElementById(DEBUG_LOG_NODE_ID);
+            if (!holder) {
+                holder = document.createElement('script');
+                holder.id = DEBUG_LOG_NODE_ID;
+                holder.type = 'application/json';
+                (document.body || document.documentElement).appendChild(holder);
+            }
+
+            holder.textContent = payload;
+        } catch (error) {
+            console.warn('[FillBARS] Не удалось опубликовать отладочный лог', error);
+        }
+    };
+
+    const compactValue = (value) => {
+        if (value === undefined || value === null) {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            return value.length > 180 ? `${value.slice(0, 180)}...` : value;
+        }
+
+        if (Array.isArray(value)) {
+            return value.slice(0, 20).map(compactValue);
+        }
+
+        if (typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value).map(([key, entryValue]) => [key, compactValue(entryValue)])
+            );
+        }
+
+        return value;
+    };
+
+    const debugLog = (event, details = {}) => {
+        const entry = {
+            time: new Date().toISOString(),
+            event,
+            details: compactValue(details)
+        };
+
+        window[DEBUG_LOG_KEY].push(entry);
+        publishDebugLogs();
+        console.log(`[FillBARS] ${event}`, entry.details);
+        return entry;
+    };
+
+    debugLog('fill:start', { profileName, assignmentStage: normalizedAssignmentStage });
+    console.log('FillBARS debug: copy(document.getElementById("fillbars-debug-logs")?.textContent || sessionStorage.getItem("FillBARS.debugLogs") || "нет логов")');
+
+    const getVisibleElements = (selector, root = document) => {
+        return Array.from(root.querySelectorAll(selector)).filter(isVisible);
+    };
+
+    const isVisibleOrInsideVisibleControl = (element) => {
+        if (!element || !element.isConnected) {
+            return false;
+        }
+
+        if (isVisible(element)) {
+            return true;
+        }
+
+        let current = element.parentElement;
+        let depth = 0;
+        while (current && depth < 4) {
+            if (isVisible(current)) {
+                return true;
+            }
+
+            current = current.parentElement;
+            depth++;
+        }
+
+        return false;
+    };
+
+    const describeElement = (element) => {
+        if (!element) {
+            return null;
+        }
+
+        const rect = element.getBoundingClientRect();
+
+        return {
+            tag: element.tagName,
+            id: element.id || '',
+            className: String(element.className || ''),
+            name: element.name || '',
+            type: element.type || '',
+            title: element.title || '',
+            text: getElementLabel(element),
+            rect: {
+                left: Math.round(rect.left),
+                top: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height)
+            },
+            visible: isVisibleOrInsideVisibleControl(element)
+        };
+    };
+
+    const getClickableSurface = (element, stopRoot = document.body) => {
+        let current = element;
+        let depth = 0;
+
+        while (current && current !== stopRoot && depth < 4) {
+            if (isVisible(current)) {
+                return current;
+            }
+
+            current = current.parentElement;
+            depth++;
+        }
+
+        return element;
+    };
+
+    const waitForCondition = async (predicate, timeout = 10000, interval = 250) => {
+        const startedAt = Date.now();
+
+        while (Date.now() - startedAt < timeout) {
+            const result = predicate();
+            if (result) {
+                return result;
+            }
+
+            await sleep(interval);
+        }
+
+        return null;
+    };
+
+    const getZIndex = (element) => {
+        const parsed = Number.parseInt(window.getComputedStyle(element).zIndex, 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+    };
+
+    const sortByWindowStack = (left, right) => {
+        const zIndexDiff = getZIndex(left) - getZIndex(right);
+        if (zIndexDiff !== 0) {
+            return zIndexDiff;
+        }
+
+        if (left === right) {
+            return 0;
+        }
+
+        return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    };
+
+    const getWindowRoot = (element) => {
+        return element?.closest('table.window.WinContent, .window.WinContent, .window') || element;
+    };
+
+    const getVisibleWindows = () => {
+        return getVisibleElements('table.window.WinContent, .window.WinContent');
+    };
+
+    const getTopVisibleWindow = (predicate = () => true) => {
+        return getVisibleWindows()
+            .filter(predicate)
+            .sort(sortByWindowStack)
+            .at(-1) || null;
+    };
+
+    const findScheduleForm = () => {
+        return getVisibleElements('.form-schedule')
+            .sort(sortByWindowStack)
+            .at(-1) || null;
+    };
+
+    const findScheduleWindow = () => {
+        const scheduleForm = findScheduleForm();
+        return scheduleForm ? getWindowRoot(scheduleForm) : null;
+    };
+
+    const hasCabinetLabel = (label) => {
+        return label.includes('лаборатория') && label.includes('амурск');
+    };
+
+    const getGridRoot = (element) => {
+        return element?.closest('.grid, .grid_container, .grid-container') || element;
+    };
+
+    const getSelectableGridRow = (element, root) => {
+        if (!element) {
+            return null;
+        }
+
+        const row = element.closest('tr, [role="row"]');
+        if (row && (!root || root.contains(row))) {
+            return row;
+        }
+
+        const dataCell = element.closest('.column_data');
+        if (dataCell && (!root || root.contains(dataCell))) {
+            return dataCell;
+        }
+
+        return element;
+    };
+
+    const normalizeClickableCandidate = (element) => {
+        return element.closest('.ctrl_button, button, input[type="button"], input[type="submit"], a') || element;
+    };
+
+    const deduplicateElements = (elements) => {
+        const seen = new Set();
+
+        return elements.filter((element) => {
+            if (!element || seen.has(element)) {
+                return false;
+            }
+
+            seen.add(element);
+            return true;
+        });
+    };
+
+    const getElementPositionKey = (element) => {
+        const rect = element.getBoundingClientRect();
+        return `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${element.name || ''}`;
+    };
+
+    const uniqueElementsByPosition = (elements) => {
+        const seen = new Set();
+
+        return elements.filter((element) => {
+            const key = getElementPositionKey(element);
+            if (seen.has(key)) {
+                return false;
+            }
+
+            seen.add(key);
+            return true;
+        });
+    };
+
+    const getScheduleGridRoot = (scheduleForm) => {
+        return scheduleForm.querySelector('.selected_values') || scheduleForm;
+    };
+
+    const findColumnHeaderRect = (root, columnLabel) => {
+        const normalizedColumnLabel = normalizeText(columnLabel);
+        const headers = getVisibleElements('td, th, div, span', root)
+            .filter((element) => {
+                const label = getElementLabel(element);
+                return label === normalizedColumnLabel
+                    || label === `сортировать колонку: ${normalizedColumnLabel}`;
+            })
+            .sort((left, right) => {
+                const leftLabel = getElementLabel(left);
+                const rightLabel = getElementLabel(right);
+                const leftPriority = (leftLabel === normalizedColumnLabel ? 10000 : 0) - leftLabel.length;
+                const rightPriority = (rightLabel === normalizedColumnLabel ? 10000 : 0) - rightLabel.length;
+
+                return rightPriority - leftPriority;
+            });
+
+        return headers[0]?.getBoundingClientRect() || null;
+    };
+
+    const isElementInColumn = (element, headerRect, tolerance = 35) => {
+        if (!headerRect) {
+            return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+
+        return centerX >= headerRect.left - tolerance
+            && centerX <= headerRect.right + tolerance
+            && rect.top > headerRect.top;
+    };
+
+    const clickAssignButton = async () => {
+        if (findScheduleForm()) {
+            return true;
+        }
+
+        const root = getVisibleElements('.dirline_order_alt').at(-1) || document.body;
+        const candidates = deduplicateElements(
+            Array.from(root.querySelectorAll('button, a, span, div, input[type="button"], input[type="submit"]'))
+                .filter((element) => {
+                    const label = getElementLabel(element);
+
+                    return isVisible(element)
+                        && label.includes('назначить')
+                        && label.length <= 80
+                        && element.querySelectorAll(CHECKBOX_SELECTOR).length === 0;
+                })
+                .map(normalizeClickableCandidate)
+        ).sort((left, right) => {
+            const leftLabel = getElementLabel(left);
+            const rightLabel = getElementLabel(right);
+            const leftPriority = (leftLabel === 'назначить' ? 10000 : 0)
+                + (left.classList.contains('ctrl_button') ? 5000 : 0)
+                + (/^(BUTTON|A|INPUT)$/i.test(left.tagName) ? 1000 : 0)
+                - leftLabel.length;
+            const rightPriority = (rightLabel === 'назначить' ? 10000 : 0)
+                + (right.classList.contains('ctrl_button') ? 5000 : 0)
+                + (/^(BUTTON|A|INPUT)$/i.test(right.tagName) ? 1000 : 0)
+                - rightLabel.length;
+
+            return rightPriority - leftPriority;
+        });
+
+        const target = candidates[0];
+        if (!target) {
+            console.warn('Кнопка "Назначить" не найдена. Подбор времени не открываю.');
+            debugLog('assign_button:not_found');
+            return false;
+        }
+
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        debugLog('assign_button:click', { target: describeElement(target) });
+        clickElement(target, false);
+
+        const scheduleForm = await waitForCondition(findScheduleForm, 15000);
+        if (!scheduleForm) {
+            console.warn('Окно "Подбор времени записи на услугу" не открылось.');
+            debugLog('schedule:not_opened');
+            return false;
+        }
+
+        console.log('Открыто окно "Подбор времени записи на услугу".');
+        debugLog('schedule:opened', { scheduleForm: describeElement(scheduleForm) });
+        return true;
+    };
+
+    const getScheduleCabinetGuideButtons = (scheduleForm) => {
+        const cabinetHeaderRect = findColumnHeaderRect(scheduleForm, 'Кабинет');
+        const buttons = uniqueElementsByPosition(
+            Array.from(scheduleForm.querySelectorAll('.ctrl_ButtonEdit_ButGuide'))
+                .filter(isVisible)
+                .filter((button) => !button.closest('.grid_header'))
+        );
+        const buttonsInCabinetColumn = buttons.filter((button) => isElementInColumn(button, cabinetHeaderRect, 80));
+        const resultButtons = buttonsInCabinetColumn.length > 0 ? buttonsInCabinetColumn : buttons;
+
+        return resultButtons
+            .sort((left, right) => {
+                const leftRect = left.getBoundingClientRect();
+                const rightRect = right.getBoundingClientRect();
+                return leftRect.top - rightRect.top || leftRect.left - rightRect.left;
+            })
+            .map((button) => ({
+                button,
+                row: button.closest('tr') || button.parentElement
+            }));
+    };
+
+    const activateElementAtCenter = async (element, useDoubleClick = false, useNativeClick = false) => {
+        if (!element || !element.isConnected) {
+            debugLog('element_activate:missing', { useDoubleClick, useNativeClick });
+            return false;
+        }
+
+        element.scrollIntoView({ block: 'center', inline: 'nearest' });
+        await sleep(60);
+
+        if (!isVisible(element)) {
+            debugLog('element_activate:not_visible', { element: describeElement(element), useDoubleClick, useNativeClick });
+            return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const hitElement = document.elementFromPoint(centerX, centerY);
+        const target = hitElement && (element.contains(hitElement) || hitElement.contains(element))
+            ? hitElement
+            : element;
+
+        debugLog('element_activate:click', {
+            element: describeElement(element),
+            target: describeElement(target),
+            centerX: Math.round(centerX),
+            centerY: Math.round(centerY),
+            useDoubleClick,
+            useNativeClick
+        });
+        clickElement(target, useDoubleClick);
+
+        if (useNativeClick && typeof target.click === 'function') {
+            target.click();
+        }
+
+        await sleep(120);
+        return true;
+    };
+
+    const isCabinetPickerWindow = (windowElement) => {
+        if (!windowElement || !windowElement.isConnected || !isVisibleOrInsideVisibleControl(windowElement)) {
+            return false;
+        }
+
+        if (windowElement.querySelector('.form-schedule')) {
+            return false;
+        }
+
+        const label = getElementLabel(windowElement);
+        return label.startsWith('кабинеты')
+            || label.includes('кабинеты наименование')
+            || label.includes('кабинетыструктура файла');
+    };
+
+    const waitForCabinetWindow = async (scheduleWindow, previousWindows, timeout = 8000) => {
+        const cabinetWindow = await waitForCondition(() => {
+            const candidates = getVisibleWindows()
+                .filter((windowElement) => windowElement !== scheduleWindow)
+                .filter(isCabinetPickerWindow)
+                .sort(sortByWindowStack);
+            const newCandidate = candidates
+                .filter((windowElement) => !previousWindows.has(windowElement))
+                .at(-1);
+
+            return newCandidate || candidates.at(-1) || null;
+        }, timeout, 200);
+
+        if (cabinetWindow) {
+            debugLog('cabinet_window:opened', {
+                isNew: !previousWindows.has(cabinetWindow),
+                window: describeElement(cabinetWindow)
+            });
+        } else {
+            debugLog('cabinet_window:not_found', {
+                windows: getVisibleWindows().map((windowElement) => ({
+                    isPrevious: previousWindows.has(windowElement),
+                    isCabinetPicker: isCabinetPickerWindow(windowElement),
+                    containsScheduleForm: !!windowElement.querySelector('.form-schedule'),
+                    window: describeElement(windowElement)
+                }))
+            });
+        }
+
+        return cabinetWindow;
+    };
+
+    const findCabinetRow = (cabinetWindow) => {
+        const root = getGridRoot(cabinetWindow.querySelector('.grid.box-sizing-force.m2, .grid')) || cabinetWindow;
+        const elements = Array.from(root.querySelectorAll('tr, [role="row"], td, div, span'))
+            .filter(isVisibleOrInsideVisibleControl)
+            .filter((element) => hasCabinetLabel(getElementLabel(element)))
+            .sort((left, right) => {
+                const leftLabel = getElementLabel(left);
+                const rightLabel = getElementLabel(right);
+                const leftPriority = (leftLabel === ASSIGNMENT_CABINET_LABEL ? 10000 : 0)
+                    + (/^(TR)$/i.test(left.tagName) ? 500 : 0)
+                    - leftLabel.length;
+                const rightPriority = (rightLabel === ASSIGNMENT_CABINET_LABEL ? 10000 : 0)
+                    + (/^(TR)$/i.test(right.tagName) ? 500 : 0)
+                    - rightLabel.length;
+
+                return rightPriority - leftPriority;
+            });
+
+        return getSelectableGridRow(elements[0], root);
+    };
+
+    const clickShortLabeledControl = async (root, labels) => {
+        const normalizedLabels = labels.map(normalizeText);
+        const candidates = deduplicateElements(
+            Array.from(root.querySelectorAll('button, a, span, div, input[type="button"], input[type="submit"]'))
+                .filter((element) => {
+                    const label = getElementLabel(element);
+
+                    return isVisibleOrInsideVisibleControl(element)
+                        && normalizedLabels.includes(label)
+                        && label.length <= 30;
+                })
+                .map((element) => getClickableSurface(normalizeClickableCandidate(element), root))
+        ).sort((left, right) => getElementLabel(left).length - getElementLabel(right).length);
+
+        const target = candidates[0];
+        if (!target) {
+            return false;
+        }
+
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        clickElement(target, false);
+        await sleep(300);
+
+        return true;
+    };
+
+    const openCabinetFilter = async (cabinetWindow) => {
+        const gridRoot = getGridRoot(cabinetWindow.querySelector('.grid.box-sizing-force.m2, .grid')) || cabinetWindow;
+        const beforeInputsCount = getVisibleElements('input[type="text"], input:not([type]), textarea', gridRoot).length;
+        const filterButtons = Array.from(gridRoot.querySelectorAll('.toggleFilter, .toggleFilterSize, .fshow, .grid_label, [title="Фильтр"]'))
+            .filter(isVisibleOrInsideVisibleControl)
+            .filter((element) => {
+                const label = getElementLabel(element);
+                const marker = normalizeText(`${element.title || ''} ${element.className || ''}`);
+
+                return marker.includes('фильтр') || label.includes('показать фильтр');
+            });
+
+        for (const button of filterButtons) {
+            clickElement(getClickableSurface(button, gridRoot), false);
+            await sleep(350);
+
+            const afterInputsCount = getVisibleElements('input[type="text"], input:not([type]), textarea', gridRoot).length;
+            const hasHideFilter = getElementLabel(gridRoot).includes('скрыть фильтр');
+
+            if (afterInputsCount > beforeInputsCount || hasHideFilter) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
+    const clickFindInCabinetWindow = async (cabinetWindow) => {
+        const gridRoot = getGridRoot(cabinetWindow.querySelector('.grid.box-sizing-force.m2, .grid')) || cabinetWindow;
+        return clickShortLabeledControl(gridRoot, ['Найти']);
+    };
+
+    const filterCabinetWindow = async (cabinetWindow) => {
+        await openCabinetFilter(cabinetWindow);
+
+        const gridRoot = getGridRoot(cabinetWindow.querySelector('.grid.box-sizing-force.m2, .grid')) || cabinetWindow;
+        const inputs = getVisibleElements('input[type="text"], input:not([type]), textarea', gridRoot)
+            .filter((input) => !input.disabled && !input.readOnly)
+            .sort((left, right) => {
+                const leftRect = left.getBoundingClientRect();
+                const rightRect = right.getBoundingClientRect();
+                return leftRect.top - rightRect.top || leftRect.left - rightRect.left;
+            });
+
+        console.log(`Окно "Кабинеты": полей фильтра найдено ${inputs.length}.`);
+        debugLog('cabinet_filter:inputs_found', {
+            inputCount: inputs.length,
+            inputs: inputs.map(describeElement)
+        });
+
+        for (const input of inputs) {
+            debugLog('cabinet_filter:set_value', { input: describeElement(input) });
+            await setInputValue(input, 'Лаборатория Амурск');
+            await clickFindInCabinetWindow(cabinetWindow);
+            await sleep(900);
+
+            const row = findCabinetRow(cabinetWindow);
+            if (row) {
+                debugLog('cabinet_filter:row_found', { row: describeElement(row) });
+                return row;
+            }
+        }
+
+        debugLog('cabinet_filter:row_not_found');
+        return null;
+    };
+
+    const isModalWindowOpen = (windowElement) => {
+        return !!windowElement && windowElement.isConnected && isVisibleOrInsideVisibleControl(windowElement);
+    };
+
+    const waitForWindowToClose = async (windowElement, timeout = 5000) => {
+        return waitForCondition(() => !isModalWindowOpen(windowElement), timeout, 200);
+    };
+
+    const dispatchEnter = (element) => {
+        const target = element || document.activeElement || document.body;
+
+        ['keydown', 'keypress', 'keyup'].forEach((type) => {
+            target.dispatchEvent(new KeyboardEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                key: 'Enter',
+                code: 'Enter',
+                keyCode: 13,
+                which: 13
+            }));
+        });
+    };
+
+    const dispatchEscape = (element) => {
+        const target = element || document.activeElement || document.body;
+
+        ['keydown', 'keypress', 'keyup'].forEach((type) => {
+            target.dispatchEvent(new KeyboardEvent(type, {
+                bubbles: true,
+                cancelable: true,
+                key: 'Escape',
+                code: 'Escape',
+                keyCode: 27,
+                which: 27
+            }));
+        });
+    };
+
+    const clickOkInWindow = async (windowElement) => {
+        const windowRect = windowElement.getBoundingClientRect();
+        const candidates = deduplicateElements(
+            Array.from(windowElement.querySelectorAll('.ctrl_button, .btn_caption, button, a, span, div, input[type="button"], input[type="submit"]'))
+                .filter((element) => {
+                    const label = getElementLabel(element);
+                    const rect = element.getBoundingClientRect();
+                    const marker = normalizeText(`${element.className || ''} ${element.title || ''}`);
+                    const isFooterButton = marker.includes('btn_center') && rect.top >= windowRect.bottom - 140;
+
+                    return isVisibleOrInsideVisibleControl(element)
+                        && !label.includes('отмена')
+                        && !label.includes('найти')
+                        && !label.includes('фильтр')
+                        && !label.includes('очистить')
+                        && (label === 'ок' || label === 'ok' || label === 'выбрать' || isFooterButton)
+                        && label.length <= 30
+                        && rect.top >= windowRect.top
+                        && rect.bottom <= windowRect.bottom + 10;
+                })
+                .map((element) => getClickableSurface(normalizeClickableCandidate(element), windowElement))
+        ).sort((left, right) => {
+            const leftLabel = getElementLabel(left);
+            const rightLabel = getElementLabel(right);
+            const leftRect = left.getBoundingClientRect();
+            const rightRect = right.getBoundingClientRect();
+            const leftPriority = (leftLabel === 'ок' || leftLabel === 'ok' ? 10000 : 0)
+                + (leftLabel === 'выбрать' ? 7000 : 0)
+                + (left.classList.contains('ctrl_button') ? 5000 : 0)
+                + leftRect.top
+                - leftLabel.length;
+            const rightPriority = (rightLabel === 'ок' || rightLabel === 'ok' ? 10000 : 0)
+                + (rightLabel === 'выбрать' ? 7000 : 0)
+                + (right.classList.contains('ctrl_button') ? 5000 : 0)
+                + rightRect.top
+                - rightLabel.length;
+
+            return rightPriority - leftPriority;
+        });
+
+        const okButton = candidates[0];
+        if (!okButton) {
+            return false;
+        }
+
+        okButton.scrollIntoView({ block: 'center', inline: 'nearest' });
+        console.log(`Окно "Кабинеты": нажимаю "${getElementLabel(okButton) || 'ОК'}".`);
+        debugLog('cabinet_confirm:ok_click', { button: describeElement(okButton) });
+        clickElement(okButton, false);
+        await sleep(500);
+
+        return true;
+    };
+
+    const clickCancelInWindow = async (windowElement) => {
+        debugLog('cabinet_close:try_cancel');
+        const clickedCancel = await clickShortLabeledControl(windowElement, ['Отмена', 'Закрыть']);
+        if (clickedCancel) {
+            await sleep(500);
+            return true;
+        }
+
+        const closeButtons = Array.from(windowElement.querySelectorAll('[title*="Закрыть"], .win_close, .win_closeButton, .close, .WinClose'))
+            .filter(isVisibleOrInsideVisibleControl);
+
+        for (const button of closeButtons) {
+            debugLog('cabinet_close:close_button_click', { button: describeElement(button) });
+            clickElement(getClickableSurface(button, windowElement), false);
+            await sleep(500);
+            return true;
+        }
+
+        debugLog('cabinet_close:no_cancel_button');
+        return false;
+    };
+
+    const getScheduleGuideAtIndex = (index) => {
+        const scheduleForm = findScheduleForm();
+        const guideButtons = scheduleForm ? getScheduleCabinetGuideButtons(scheduleForm) : [];
+        return guideButtons[index] || null;
+    };
+
+    const isCabinetAppliedToSchedule = (guide, index) => {
+        const currentGuide = getScheduleGuideAtIndex(index) || guide;
+        const row = currentGuide?.row || currentGuide?.button?.closest('tr');
+        const control = currentGuide?.button?.closest('.ctrl_ButtonEdit, .editControl, td, tr');
+
+        return hasCabinetLabel(getElementLabel(row))
+            || hasCabinetLabel(getElementLabel(control));
+    };
+
+    const waitForCabinetAppliedToSchedule = async (guide, index, timeout = 3000) => {
+        return waitForCondition(() => isCabinetAppliedToSchedule(guide, index), timeout, 200);
+    };
+
+    const closeCabinetWindowAfterApplied = async (cabinetWindow) => {
+        if (!isModalWindowOpen(cabinetWindow)) {
+            debugLog('cabinet_close:already_closed_after_apply');
+            return true;
+        }
+
+        console.log('Окно "Кабинеты": значение применилось, закрываю справочник без повторного подтверждения.');
+        debugLog('cabinet_close:after_applied_start', { window: describeElement(cabinetWindow) });
+
+        if (await clickCancelInWindow(cabinetWindow)) {
+            if (await waitForWindowToClose(cabinetWindow, 4000)) {
+                debugLog('cabinet_close:closed_by_cancel');
+                return true;
+            }
+        }
+
+        dispatchEscape(document.activeElement);
+        await sleep(700);
+
+        if (await waitForWindowToClose(cabinetWindow, 3000)) {
+            debugLog('cabinet_close:closed_by_escape');
+            return true;
+        }
+
+        console.warn('Окно "Кабинеты" не закрылось после применения значения. Останавливаю дальнейшую обработку.');
+        debugLog('cabinet_close:failed_after_applied', { window: describeElement(cabinetWindow) });
+        return false;
+    };
+
+    const confirmCabinetSelection = async (cabinetWindow, cabinetRow) => {
+        if (!isModalWindowOpen(cabinetWindow)) {
+            return true;
+        }
+
+        if (await clickOkInWindow(cabinetWindow)) {
+            if (await waitForWindowToClose(cabinetWindow, 5000)) {
+                return true;
+            }
+        }
+
+        if (cabinetRow?.isConnected) {
+            cabinetRow.focus?.();
+            dispatchEnter(cabinetRow);
+            await sleep(600);
+
+            if (await waitForWindowToClose(cabinetWindow, 3000)) {
+                return true;
+            }
+        }
+
+        dispatchEnter(document.activeElement);
+        await sleep(600);
+
+        if (await waitForWindowToClose(cabinetWindow, 3000)) {
+            return true;
+        }
+
+        console.warn('Окно "Кабинеты" не закрылось автоматически. Выбор уже сделан, но окно осталось открытым.');
+        return false;
+    };
+
+    const selectCabinetInWindow = async (cabinetWindow, guide, index) => {
+        debugLog('cabinet_select:start', {
+            index,
+            cabinetWindow: describeElement(cabinetWindow),
+            guide: describeElement(guide?.button)
+        });
+
+        let cabinetRow = await waitForCondition(() => findCabinetRow(cabinetWindow), 3000, 250);
+        if (!cabinetRow) {
+            cabinetRow = await filterCabinetWindow(cabinetWindow);
+        }
+
+        if (!cabinetRow) {
+            console.warn('В окне "Кабинеты" не найдена строка "Лаборатория Амурск".');
+            debugLog('cabinet_select:row_not_found', {
+                index,
+                cabinetWindow: describeElement(cabinetWindow)
+            });
+            return false;
+        }
+
+        cabinetRow.scrollIntoView({ block: 'center', inline: 'nearest' });
+        console.log('Окно "Кабинеты": выбираю "Лаборатория Амурск".');
+        debugLog('cabinet_select:row_click', {
+            index,
+            row: describeElement(cabinetRow)
+        });
+        clickElement(cabinetRow, true);
+        await sleep(700);
+
+        if (await waitForCabinetAppliedToSchedule(guide, index, 3500)) {
+            debugLog('cabinet_select:applied_after_row_click', { index });
+            return closeCabinetWindowAfterApplied(cabinetWindow);
+        }
+
+        if (!isModalWindowOpen(cabinetWindow)) {
+            debugLog('cabinet_select:assume_applied_after_window_closed', { index });
+            return true;
+        }
+
+        if (isModalWindowOpen(cabinetWindow)) {
+            await confirmCabinetSelection(cabinetWindow, cabinetRow);
+        }
+
+        if (await waitForCabinetAppliedToSchedule(guide, index, 2500)) {
+            debugLog('cabinet_select:applied_after_confirm', { index });
+            return closeCabinetWindowAfterApplied(cabinetWindow);
+        }
+
+        if (!isModalWindowOpen(cabinetWindow)) {
+            debugLog('cabinet_select:assume_applied_after_confirm_closed', { index });
+            return true;
+        }
+
+        console.warn(`Лаборатория Амурск не применилась для строки ${index + 1}. Останавливаю дальнейшую обработку.`);
+        debugLog('cabinet_select:not_applied', {
+            index,
+            guide: describeElement(guide?.button),
+            snapshot: getScheduleDebugSnapshot()
+        });
+        return false;
+    };
+
+    const chooseCabinetsInSchedule = async () => {
+        const scheduleReady = await waitForScheduleReady();
+        if (!scheduleReady?.scheduleForm) {
+            return { selected: 0, total: 0 };
+        }
+
+        let selected = 0;
+        let total = getScheduleCabinetGuideButtons(scheduleReady.scheduleForm).length;
+        let stopped = false;
+        console.log(`Подбор времени: найдено кнопок выбора кабинета: ${total}`);
+        debugLog('cabinet_choose:start', { total, snapshot: getScheduleDebugSnapshot() });
+
+        for (let index = 0; index < total; index++) {
+            const guide = await waitForCondition(() => {
+                const scheduleForm = findScheduleForm();
+                const guideButtons = scheduleForm ? getScheduleCabinetGuideButtons(scheduleForm) : [];
+
+                if (guideButtons.length > total) {
+                    total = guideButtons.length;
+                }
+
+                return guideButtons[index]?.button?.isConnected && isVisible(guideButtons[index].button)
+                    ? guideButtons[index]
+                    : null;
+            }, 5000, 200);
+            const scheduleWindow = findScheduleWindow();
+            if (!guide || !scheduleWindow) {
+                debugLog('cabinet_choose:guide_missing', { index, total, snapshot: getScheduleDebugSnapshot() });
+                continue;
+            }
+
+            if (isCabinetAppliedToSchedule(guide, index)) {
+                selected++;
+                debugLog('cabinet_choose:already_applied', {
+                    index,
+                    guide: describeElement(guide.button)
+                });
+                continue;
+            }
+
+            console.log(`Подбор времени: выбираю кабинет для строки ${index + 1}/${total}.`);
+            debugLog('cabinet_choose:open_window', {
+                index,
+                total,
+                guide: describeElement(guide.button),
+                row: describeElement(guide.row)
+            });
+            const previousWindows = new Set(getVisibleWindows());
+            await activateElementAtCenter(guide.button, false, false);
+
+            let cabinetWindow = await waitForCabinetWindow(scheduleWindow, previousWindows, 7000);
+            if (!cabinetWindow && guide.button.isConnected) {
+                await activateElementAtCenter(guide.button, true, false);
+                cabinetWindow = await waitForCabinetWindow(scheduleWindow, previousWindows, 6000);
+            }
+
+            if (!cabinetWindow && guide.button.isConnected) {
+                await activateElementAtCenter(guide.button, false, true);
+                cabinetWindow = await waitForCabinetWindow(scheduleWindow, previousWindows, 8000);
+            }
+
+            if (!cabinetWindow) {
+                console.warn(`Окно "Кабинеты" не открылось для строки ${index + 1}.`);
+                debugLog('cabinet_choose:window_not_opened', {
+                    index,
+                    guide: describeElement(guide.button),
+                    snapshot: getScheduleDebugSnapshot()
+                });
+                stopped = true;
+                break;
+            }
+
+            const isSelected = await selectCabinetInWindow(cabinetWindow, guide, index);
+            if (isSelected) {
+                selected++;
+                debugLog('cabinet_choose:selected', { index, selected, total });
+            } else {
+                debugLog('cabinet_choose:stop_after_failed_select', {
+                    index,
+                    selected,
+                    total,
+                    modalStillOpen: isModalWindowOpen(cabinetWindow),
+                    snapshot: getScheduleDebugSnapshot()
+                });
+                stopped = true;
+                break;
+            }
+
+            await sleep(350);
+        }
+
+        debugLog('cabinet_choose:done', { selected, total, stopped, snapshot: getScheduleDebugSnapshot() });
+        return { selected, total, stopped };
+    };
+
+    const uniqueCheckboxesByPosition = (checkboxes) => {
+        return uniqueElementsByPosition(checkboxes);
+    };
+
+    const findUrgentCheckboxesInSchedule = (scheduleForm) => {
+        const gridRoot = getScheduleGridRoot(scheduleForm);
+        const checkboxes = getVisibleElements('input[type="checkbox"]', gridRoot)
+            .filter((checkbox) => !checkbox.disabled);
+
+        const namedUrgent = checkboxes.filter((checkbox) => {
+            const marker = normalizeText([
+                checkbox.name,
+                checkbox.id,
+                checkbox.className,
+                checkbox.title
+            ].filter(Boolean).join(' '));
+
+            return marker.includes('cito') || marker.includes('сроч');
+        });
+
+        if (namedUrgent.length > 0) {
+            return uniqueCheckboxesByPosition(namedUrgent);
+        }
+
+        const urgentHeaderRect = findColumnHeaderRect(gridRoot, 'Срочно');
+        if (!urgentHeaderRect) {
+            return [];
+        }
+
+        return uniqueCheckboxesByPosition(checkboxes
+            .filter((checkbox) => checkbox.name !== 'GridServices_SelectList_Item')
+            .filter((checkbox) => isElementInColumn(checkbox, urgentHeaderRect, 35)));
+    };
+
+    const getScheduleDebugSnapshot = () => {
+        const scheduleForm = findScheduleForm();
+        const guideButtons = scheduleForm ? getScheduleCabinetGuideButtons(scheduleForm) : [];
+        const urgentCheckboxes = scheduleForm ? findUrgentCheckboxesInSchedule(scheduleForm) : [];
+
+        return {
+            hasScheduleForm: !!scheduleForm,
+            scheduleForm: describeElement(scheduleForm),
+            guideCount: guideButtons.length,
+            urgentCount: urgentCheckboxes.length,
+            guides: guideButtons.map((guide, index) => ({
+                index,
+                button: describeElement(guide.button),
+                row: describeElement(guide.row)
+            })),
+            urgentCheckboxes: urgentCheckboxes.map((checkbox, index) => ({
+                index,
+                checkbox: describeElement(checkbox),
+                checked: checkbox.checked
+            })),
+            windows: getVisibleWindows().map((windowElement, index) => {
+                const label = getElementLabel(windowElement);
+                return {
+                    index,
+                    window: describeElement(windowElement),
+                    containsScheduleForm: !!windowElement.querySelector('.form-schedule'),
+                    looksLikeCabinetWindow: isCabinetPickerWindow(windowElement)
+                };
+            })
+        };
+    };
+
+    const setUrgentCheckboxesInSchedule = async () => {
+        const scheduleForm = findScheduleForm();
+        if (!scheduleForm) {
+            debugLog('urgent:no_schedule');
+            return { selected: 0, total: 0 };
+        }
+
+        const urgentCheckboxes = findUrgentCheckboxesInSchedule(scheduleForm);
+        let selected = 0;
+        console.log(`Подбор времени: найдено чек-боксов "Срочно": ${urgentCheckboxes.length}`);
+        debugLog('urgent:start', {
+            urgentCount: urgentCheckboxes.length,
+            checkboxes: urgentCheckboxes.map((checkbox) => ({
+                checkbox: describeElement(checkbox),
+                checked: checkbox.checked
+            }))
+        });
+
+        for (const checkbox of urgentCheckboxes) {
+            if (!checkbox.isConnected || !isVisible(checkbox)) {
+                debugLog('urgent:skip_not_visible', { checkbox: describeElement(checkbox) });
+                continue;
+            }
+
+            if (!checkbox.checked) {
+                debugLog('urgent:click', { checkbox: describeElement(checkbox) });
+                clickCheckboxLikeUser(checkbox);
+                await waitForBarsToProcessSelection();
+            }
+
+            if (checkbox.checked) {
+                selected++;
+            }
+        }
+
+        debugLog('urgent:done', { selected, total: urgentCheckboxes.length });
+        return { selected, total: urgentCheckboxes.length };
+    };
+
+    const waitForScheduleReady = async () => {
+        const startedAt = Date.now();
+        let lastKey = '';
+        let stableSince = Date.now();
+        let lastReady = null;
+
+        debugLog('schedule_ready:wait_start');
+
+        while (Date.now() - startedAt < 25000) {
+            const scheduleForm = findScheduleForm();
+            if (!scheduleForm) {
+                await sleep(250);
+                continue;
+            }
+
+            const guideCount = getScheduleCabinetGuideButtons(scheduleForm).length;
+            const urgentCount = findUrgentCheckboxesInSchedule(scheduleForm).length;
+            const key = `${guideCount}:${urgentCount}`;
+
+            if (guideCount > 0 && urgentCount > 0) {
+                lastReady = { scheduleForm, guideCount, urgentCount };
+
+                if (key !== lastKey) {
+                    lastKey = key;
+                    stableSince = Date.now();
+                    debugLog('schedule_ready:counts_changed', { guideCount, urgentCount });
+                }
+
+                if (Date.now() - stableSince >= 1200) {
+                    debugLog('schedule_ready:ready', { guideCount, urgentCount, snapshot: getScheduleDebugSnapshot() });
+                    return lastReady;
+                }
+            } else {
+                lastKey = key;
+                stableSince = Date.now();
+            }
+
+            await sleep(250);
+        }
+
+        debugLog('schedule_ready:timeout', {
+            lastReady: lastReady ? {
+                guideCount: lastReady.guideCount,
+                urgentCount: lastReady.urgentCount
+            } : null,
+            snapshot: getScheduleDebugSnapshot()
+        });
+        return lastReady;
+    };
+
+    const prepareScheduleForAssignment = async () => {
+        await sleep(600);
+
+        const scheduleOpened = await clickAssignButton();
+        if (!scheduleOpened) {
+            return 'подбор времени не открыт';
+        }
+
+        const scheduleReady = await waitForScheduleReady();
+        if (!scheduleReady) {
+            console.warn('Окно подбора времени открылось, но строки таблицы не загрузились.');
+            return 'подбор времени открыт, но строки не найдены';
+        }
+
+        console.log(`Подбор времени готов: кнопок кабинета ${scheduleReady.guideCount}, чек-боксов "Срочно" ${scheduleReady.urgentCount}.`);
+        await sleep(300);
+
+        const cabinetsResult = await chooseCabinetsInSchedule();
+        await sleep(500);
+        if (cabinetsResult.stopped) {
+            const resultMessage = `кабинеты: ${cabinetsResult.selected}/${cabinetsResult.total}, срочно: пропущено из-за незакрытого окна кабинетов`;
+            debugLog('schedule:stopped_after_cabinets', { resultMessage, snapshot: getScheduleDebugSnapshot() });
+            console.warn(`Подбор времени остановлен (${resultMessage}). Кнопка "Записать" не нажималась.`);
+            return `подбор времени остановлен (${resultMessage})`;
+        }
+
+        const urgentResult = await setUrgentCheckboxesInSchedule();
+        const resultMessage = [
+            `кабинеты: ${cabinetsResult.selected}/${cabinetsResult.total}`,
+            `срочно: ${urgentResult.selected}/${urgentResult.total}`
+        ].join(', ');
+
+        console.log(`Подбор времени подготовлен (${resultMessage}). Кнопка "Записать" не нажималась.`);
+        return `подбор времени подготовлен (${resultMessage})`;
+    };
     
     await openAllResearches();
 
@@ -1629,8 +2817,19 @@ async function fillForm(formData, profileName) {
             console.log(`✗ Снят анализ: ${itemValue}`);
         }
     }
+
+    let scheduleMessage = '';
+    if (normalizedAssignmentStage === ASSIGNMENT_STAGE_ANALYSES) {
+        scheduleMessage = 'остановлено после выбора анализов';
+        debugLog('schedule:skipped_by_setting', { assignmentStage: normalizedAssignmentStage });
+        console.log('Настройка сценария: остановка после выбора анализов. Кнопку "Назначить" не нажимаю.');
+    } else if (filledCount > 0) {
+        scheduleMessage = await prepareScheduleForAssignment();
+    } else {
+        console.warn('Анализы не были обработаны, кнопку "Назначить" не нажимаю.');
+    }
     
-    const message = `Профиль "${profileName}": обработано ${filledCount} анализов (всего на странице: ${allCheckboxes.length})`;
+    const message = `Профиль "${profileName}": обработано ${filledCount} анализов (всего на странице: ${allCheckboxes.length})${scheduleMessage ? `. ${scheduleMessage}` : ''}`;
     console.log(message);
     console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
     
