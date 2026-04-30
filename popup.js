@@ -2,61 +2,24 @@
 // 1. НАСТРОЙКА ПРОФИЛЕЙ
 // ==============================================
 
-const DEFAULT_PROFILES = {
-    "🧪 ОНМК при поступлении": {
-        "97829568": true,
-        "97829604": true,
-        "97829634": true,
-        "97829650": true,
-        "97829667": true,
-        "97829683": true,
-        "97829731": true,
-        "97829747": true,
-        "97829795": true,
-        "97829833": true,
-        "97829881": true,
-        "97829897": true,
-        "97829930": true,
-        "97830039": true,
-        "97830060": true,
-        "97830076": true,
-        "97830092": true,
-        "97830108": true,
-        "97830130": true,
-        "14767094583": true,
-        "14767110898": true,
-        "14767140828": true,
-    },
-
-    "💊 Ежедневный анализ РАО": {
-        "97829568": true,
-        "97829650": true,
-        "97829683": true,
-        "97829731": true,
-        "97829747": true,
-        "97829833": true,
-        "97829881": true,
-        "97829913": true,
-        "97830039": true,
-        "97830060": true,
-        "97830076": true,
-        "97830108": true,
-        "97830130": true,
-        "97830212": true,
-        "14767110898": true,
-        "14767140828": true,
-        "14767125442": true,
-        "14767094583": true,
-    },
-};
+const CONFIG_FILE_NAME = 'fillbars-config.json';
+let CONFIG_TEMPLATES = {};
+let CONFIG_ACTIVE_PROFILE_NAMES = [];
+let CONFIG_RESEARCH_CATALOG = {};
+let CONFIG_ASSIGNMENT_SETTINGS = {};
 // ==============================================
 
-const PROFILE_STORAGE_KEY = 'barsCustomProfilesV2';
-const DELETED_DEFAULT_PROFILES_KEY = 'barsDeletedDefaultProfilesV2';
-const RESEARCH_CATALOG_STORAGE_KEY = 'barsResearchCatalogV2';
-const ASSIGNMENT_STAGE_STORAGE_KEY = 'barsAssignmentStageV1';
+const PROFILE_STORAGE_KEY = 'barsCustomProfilesV4';
+const ACTIVE_PROFILE_NAMES_STORAGE_KEY = 'barsActiveProfileNamesV1';
+const RESEARCH_CATALOG_STORAGE_KEY = 'barsResearchCatalogV3';
+const ASSIGNMENT_SETTINGS_STORAGE_KEY = 'barsAssignmentSettingsV1';
 const ASSIGNMENT_STAGE_ANALYSES = 'analyses';
 const ASSIGNMENT_STAGE_SCHEDULE = 'schedule';
+const DEFAULT_ASSIGNMENT_SETTINGS = {
+    assignmentStage: ASSIGNMENT_STAGE_ANALYSES,
+    targetCabinet: '',
+    markUrgent: false
+};
 const PROFILE_ICONS = ['🔴', '🟠', '🟡', '🫁', '⚠️', '🏥', '⭐', '🩸', '❤️', '🧪', '🦠', '🧬', '💊', '🔬', '🧫', '🩺', '🚑', '📋'];
 const CHECKBOX_SELECTOR = 'input[name="GridResearch_SelectList_Item"]';
 const RESEARCH_MATERIAL_NAMES = new Set([
@@ -84,14 +47,90 @@ const RESEARCH_MATERIAL_NAMES = new Set([
     'мазок слизистой ротоглотки',
     'соскоб'
 ]);
-let PROFILES = loadProfiles();
+let PROFILES = {};
 let loadedResearches = loadSavedResearches();
 let editingProfileName = null;
 let selectedResearchIds = new Set();
 let selectedProfileIcon = PROFILE_ICONS[0];
 
-function getDefaultProfileNames() {
-    return Object.keys(DEFAULT_PROFILES);
+function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeProfiles(rawProfiles) {
+    if (!isPlainObject(rawProfiles)) {
+        return {};
+    }
+
+    return Object.entries(rawProfiles).reduce((profiles, [profileName, analyses]) => {
+        if (!profileName || !isPlainObject(analyses)) {
+            return profiles;
+        }
+
+        const normalizedAnalyses = Object.entries(analyses).reduce((result, [researchId, enabled]) => {
+            if (researchId && enabled === true) {
+                result[researchId] = true;
+            }
+            return result;
+        }, {});
+
+        profiles[profileName] = normalizedAnalyses;
+        return profiles;
+    }, {});
+}
+
+function normalizeProfileNameList(rawNames, profileLibrary = {}) {
+    if (!Array.isArray(rawNames)) {
+        return [];
+    }
+
+    const seen = new Set();
+    return rawNames
+        .map((profileName) => String(profileName || '').trim())
+        .filter((profileName) => {
+            if (!profileName || seen.has(profileName) || !profileLibrary[profileName]) {
+                return false;
+            }
+
+            seen.add(profileName);
+            return true;
+        });
+}
+
+function normalizeAssignmentSettings(settings = {}) {
+    const targetCabinet = String(settings.targetCabinet || '').trim();
+    const requestedStage = settings.assignmentStage === ASSIGNMENT_STAGE_SCHEDULE
+        ? ASSIGNMENT_STAGE_SCHEDULE
+        : ASSIGNMENT_STAGE_ANALYSES;
+
+    return {
+        assignmentStage: targetCabinet ? requestedStage : ASSIGNMENT_STAGE_ANALYSES,
+        targetCabinet,
+        markUrgent: settings.markUrgent === true
+    };
+}
+
+async function loadExtensionConfigFile() {
+    try {
+        const response = await fetch(chrome.runtime.getURL(CONFIG_FILE_NAME), { cache: 'no-store' });
+        if (!response.ok) {
+            return {};
+        }
+
+        const rawConfig = (await response.text()).trim();
+        return rawConfig ? JSON.parse(rawConfig) : {};
+    } catch (error) {
+        console.warn(`Не удалось прочитать ${CONFIG_FILE_NAME}`, error);
+        return {};
+    }
+}
+
+function applyExtensionConfig(config) {
+    CONFIG_TEMPLATES = normalizeProfiles(config?.templates || config?.profiles);
+    CONFIG_ACTIVE_PROFILE_NAMES = normalizeProfileNameList(config?.activeProfiles || [], CONFIG_TEMPLATES);
+    CONFIG_RESEARCH_CATALOG = getNormalizedResearchCatalog(config?.researchCatalog || {});
+    CONFIG_ASSIGNMENT_SETTINGS = normalizeAssignmentSettings(config?.settings || {});
+    loadedResearches = loadSavedResearches();
 }
 
 function readJsonStorage(key, fallbackValue) {
@@ -109,34 +148,40 @@ function writeJsonStorage(key, value) {
 }
 
 function getCustomProfiles() {
-    return readJsonStorage(PROFILE_STORAGE_KEY, {});
+    return normalizeProfiles(readJsonStorage(PROFILE_STORAGE_KEY, {}));
 }
 
 function saveCustomProfiles(customProfiles) {
-    writeJsonStorage(PROFILE_STORAGE_KEY, customProfiles);
+    writeJsonStorage(PROFILE_STORAGE_KEY, normalizeProfiles(customProfiles));
 }
 
-function getDeletedDefaultProfiles() {
-    return new Set(readJsonStorage(DELETED_DEFAULT_PROFILES_KEY, []));
+function getTemplateLibrary() {
+    return {
+        ...CONFIG_TEMPLATES,
+        ...getCustomProfiles()
+    };
 }
 
-function saveDeletedDefaultProfiles(deletedProfiles) {
-    writeJsonStorage(DELETED_DEFAULT_PROFILES_KEY, Array.from(deletedProfiles));
+function getActiveProfileNames() {
+    const profileLibrary = getTemplateLibrary();
+    const rawValue = localStorage.getItem(ACTIVE_PROFILE_NAMES_STORAGE_KEY);
+    if (rawValue === null) {
+        return normalizeProfileNameList(CONFIG_ACTIVE_PROFILE_NAMES, profileLibrary);
+    }
+
+    return normalizeProfileNameList(readJsonStorage(ACTIVE_PROFILE_NAMES_STORAGE_KEY, []), profileLibrary);
+}
+
+function saveActiveProfileNames(profileNames) {
+    writeJsonStorage(ACTIVE_PROFILE_NAMES_STORAGE_KEY, normalizeProfileNameList(profileNames, getTemplateLibrary()));
 }
 
 function loadProfiles() {
-    const deletedDefaultProfiles = getDeletedDefaultProfiles();
-    const customProfiles = getCustomProfiles();
+    const profileLibrary = getTemplateLibrary();
     const profiles = {};
 
-    for (const profileName of getDefaultProfileNames()) {
-        if (!deletedDefaultProfiles.has(profileName)) {
-            profiles[profileName] = { ...DEFAULT_PROFILES[profileName] };
-        }
-    }
-
-    for (const [profileName, analyses] of Object.entries(customProfiles)) {
-        profiles[profileName] = { ...analyses };
+    for (const profileName of getActiveProfileNames()) {
+        profiles[profileName] = { ...profileLibrary[profileName] };
     }
 
     return profiles;
@@ -160,11 +205,9 @@ function normalizeResearchName(name, researchId) {
     return normalizedName;
 }
 
-function getResearchCatalog() {
-    const savedCatalog = readJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, {});
-
-    if (Array.isArray(savedCatalog)) {
-        return savedCatalog.reduce((catalog, research) => {
+function getNormalizedResearchCatalog(rawCatalog) {
+    if (Array.isArray(rawCatalog)) {
+        return rawCatalog.reduce((catalog, research) => {
             const name = normalizeResearchName(research.name, research.id);
             if (research.id && name) {
                 catalog[research.id] = name;
@@ -173,11 +216,11 @@ function getResearchCatalog() {
         }, {});
     }
 
-    if (!savedCatalog || typeof savedCatalog !== 'object') {
+    if (!rawCatalog || typeof rawCatalog !== 'object') {
         return {};
     }
 
-    return Object.entries(savedCatalog).reduce((catalog, [researchId, name]) => {
+    return Object.entries(rawCatalog).reduce((catalog, [researchId, name]) => {
         const normalizedName = normalizeResearchName(name, researchId);
         if (researchId && normalizedName) {
             catalog[researchId] = normalizedName;
@@ -186,31 +229,66 @@ function getResearchCatalog() {
     }, {});
 }
 
+function getResearchCatalog() {
+    const savedCatalog = getNormalizedResearchCatalog(readJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, {}));
+    return {
+        ...CONFIG_RESEARCH_CATALOG,
+        ...savedCatalog
+    };
+}
+
 function saveResearchCatalog(catalog) {
     writeJsonStorage(RESEARCH_CATALOG_STORAGE_KEY, catalog);
 }
 
-function getAssignmentStage() {
-    const stage = localStorage.getItem(ASSIGNMENT_STAGE_STORAGE_KEY);
-    return stage === ASSIGNMENT_STAGE_ANALYSES ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
+function getAssignmentSettings() {
+    const savedSettings = readJsonStorage(ASSIGNMENT_SETTINGS_STORAGE_KEY, {});
+    return normalizeAssignmentSettings({
+        ...DEFAULT_ASSIGNMENT_SETTINGS,
+        ...CONFIG_ASSIGNMENT_SETTINGS,
+        ...savedSettings
+    });
 }
 
-function saveAssignmentStage(stage) {
-    const normalizedStage = stage === ASSIGNMENT_STAGE_ANALYSES ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
-    localStorage.setItem(ASSIGNMENT_STAGE_STORAGE_KEY, normalizedStage);
-    return normalizedStage;
+function saveAssignmentSettings(settings) {
+    const normalizedSettings = normalizeAssignmentSettings(settings);
+    writeJsonStorage(ASSIGNMENT_SETTINGS_STORAGE_KEY, normalizedSettings);
+    return normalizedSettings;
 }
 
-function updateAssignmentStageUi(stage = getAssignmentStage()) {
+function updateAssignmentStageUi(settings = getAssignmentSettings()) {
     const slider = document.getElementById('assignmentStageSlider');
     const label = document.getElementById('assignmentStageText');
+    const targetCabinetInput = document.getElementById('targetCabinetInput');
+    const markUrgentCheckbox = document.getElementById('markUrgentCheckbox');
+    const hint = document.getElementById('assignmentStageHint');
 
     if (!slider || !label) {
         return;
     }
 
-    slider.value = stage === ASSIGNMENT_STAGE_ANALYSES ? '0' : '1';
-    label.textContent = stage === ASSIGNMENT_STAGE_ANALYSES ? 'Только анализы' : 'Кабинеты и срочно';
+    const normalizedSettings = normalizeAssignmentSettings(settings);
+    const canUseSchedule = !!normalizedSettings.targetCabinet;
+
+    slider.disabled = !canUseSchedule;
+    slider.value = normalizedSettings.assignmentStage === ASSIGNMENT_STAGE_SCHEDULE ? '1' : '0';
+    label.textContent = canUseSchedule && normalizedSettings.assignmentStage === ASSIGNMENT_STAGE_SCHEDULE
+        ? (normalizedSettings.markUrgent ? 'Кабинеты и срочно' : 'Кабинеты')
+        : 'Только анализы';
+
+    if (targetCabinetInput) {
+        targetCabinetInput.value = normalizedSettings.targetCabinet;
+    }
+
+    if (markUrgentCheckbox) {
+        markUrgentCheckbox.checked = normalizedSettings.markUrgent;
+    }
+
+    if (hint) {
+        hint.textContent = canUseSchedule
+            ? ''
+            : 'Укажите кабинет, чтобы включить этап кабинетов.';
+    }
 }
 
 function loadSavedResearches() {
@@ -290,7 +368,16 @@ function renderProfileManagerList() {
     const list = document.getElementById('profileManagerList');
     list.textContent = '';
 
-    for (const profileName of Object.keys(PROFILES)) {
+    const profileNames = Object.keys(PROFILES);
+    if (profileNames.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'Активные шаблоны не выбраны';
+        list.appendChild(empty);
+        return;
+    }
+
+    for (const profileName of profileNames) {
         const row = document.createElement('div');
         row.className = 'profile-row';
 
@@ -311,6 +398,62 @@ function renderProfileManagerList() {
         deleteButton.addEventListener('click', () => deleteProfile(profileName));
 
         row.append(name, editButton, deleteButton);
+        list.appendChild(row);
+    }
+}
+
+function renderTemplateLibraryList() {
+    const list = document.getElementById('templateLibraryList');
+    if (!list) {
+        return;
+    }
+
+    const profileLibrary = getTemplateLibrary();
+    const activeProfileNames = new Set(getActiveProfileNames());
+    const profileNames = Object.keys(profileLibrary);
+    list.textContent = '';
+
+    if (profileNames.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = 'Предзагруженных шаблонов нет';
+        list.appendChild(empty);
+        return;
+    }
+
+    for (const profileName of profileNames) {
+        const row = document.createElement('div');
+        row.className = 'template-row';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = activeProfileNames.has(profileName);
+        checkbox.addEventListener('change', () => {
+            const nextActiveNames = new Set(getActiveProfileNames());
+            if (checkbox.checked) {
+                nextActiveNames.add(profileName);
+            } else {
+                nextActiveNames.delete(profileName);
+            }
+
+            saveActiveProfileNames(Array.from(nextActiveNames));
+            refreshProfiles();
+            populateProfileSelect();
+            renderProfileManagerList();
+            renderTemplateLibraryList();
+        });
+
+        const name = document.createElement('span');
+        name.className = 'profile-row-name';
+        name.textContent = profileName;
+
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'small-btn';
+        editButton.textContent = 'Ред.';
+        editButton.addEventListener('click', () => openProfileEditor(profileName));
+
+        row.append(checkbox, name, editButton);
         list.appendChild(row);
     }
 }
@@ -396,6 +539,7 @@ function renderResearchList() {
 
 function openSettingsPanel() {
     document.getElementById('settingsPanel').classList.remove('hidden');
+    renderTemplateLibraryList();
     renderProfileManagerList();
 }
 
@@ -413,9 +557,10 @@ async function openProfileEditor(profileName = null) {
     editingProfileName = profileName;
 
     if (profileName) {
+        const profileLibrary = getTemplateLibrary();
         const profileTitle = splitProfileTitle(profileName);
         selectedProfileIcon = profileTitle.icon;
-        selectedResearchIds = new Set(Object.keys(PROFILES[profileName] || {}));
+        selectedResearchIds = new Set(Object.keys(profileLibrary[profileName] || {}));
         nameInput.value = profileTitle.name;
         title.textContent = 'Редактирование профиля';
         saveButton.textContent = 'Сохранить назначение';
@@ -457,10 +602,11 @@ function saveProfileFromEditor() {
 
     const newTitle = makeProfileTitle(selectedProfileIcon, profileName);
     const customProfiles = getCustomProfiles();
-    const deletedDefaultProfiles = getDeletedDefaultProfiles();
+    const activeProfileNames = new Set(getActiveProfileNames());
+    const profileLibrary = getTemplateLibrary();
     const analyses = {};
 
-    if (PROFILES[newTitle] && editingProfileName !== newTitle && !confirm(`Назначение "${newTitle}" уже существует. Заменить его?`)) {
+    if (profileLibrary[newTitle] && editingProfileName !== newTitle && !confirm(`Назначение "${newTitle}" уже существует. Заменить его?`)) {
         return;
     }
 
@@ -472,17 +618,16 @@ function saveProfileFromEditor() {
 
     if (editingProfileName && editingProfileName !== newTitle) {
         delete customProfiles[editingProfileName];
-
-        if (DEFAULT_PROFILES[editingProfileName]) {
-            deletedDefaultProfiles.add(editingProfileName);
-        }
+        activeProfileNames.delete(editingProfileName);
     }
 
     customProfiles[newTitle] = analyses;
+    activeProfileNames.add(newTitle);
     saveCustomProfiles(customProfiles);
-    saveDeletedDefaultProfiles(deletedDefaultProfiles);
+    saveActiveProfileNames(Array.from(activeProfileNames));
     refreshProfiles();
     populateProfileSelect(newTitle);
+    renderTemplateLibraryList();
     renderProfileManagerList();
     closeProfileEditor();
     setStatus(`✅ Назначение "${newTitle}" сохранено`);
@@ -494,21 +639,84 @@ function deleteProfile(profileName) {
     }
 
     const customProfiles = getCustomProfiles();
-    const deletedDefaultProfiles = getDeletedDefaultProfiles();
+    const activeProfileNames = new Set(getActiveProfileNames());
 
     delete customProfiles[profileName];
-
-    if (DEFAULT_PROFILES[profileName]) {
-        deletedDefaultProfiles.add(profileName);
-    }
+    activeProfileNames.delete(profileName);
 
     saveCustomProfiles(customProfiles);
-    saveDeletedDefaultProfiles(deletedDefaultProfiles);
+    saveActiveProfileNames(Array.from(activeProfileNames));
     refreshProfiles();
     populateProfileSelect();
+    renderTemplateLibraryList();
     renderProfileManagerList();
     closeProfileEditor();
     setStatus(`✅ Назначение "${profileName}" удалено`);
+}
+
+function getPortableConfig() {
+    return {
+        templates: normalizeProfiles(getTemplateLibrary()),
+        activeProfiles: getActiveProfileNames(),
+        settings: getAssignmentSettings(),
+        researchCatalog: getResearchCatalog()
+    };
+}
+
+function exportConfigFile() {
+    const config = getPortableConfig();
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = url;
+    link.download = CONFIG_FILE_NAME;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus(`✅ Файл ${CONFIG_FILE_NAME} подготовлен`);
+}
+
+function importConfigObject(config) {
+    const importedTemplates = normalizeProfiles(config?.templates || config?.profiles);
+    const importedActiveProfiles = Array.isArray(config?.activeProfiles)
+        ? normalizeProfileNameList(config.activeProfiles, importedTemplates)
+        : normalizeProfileNameList(Object.keys(importedTemplates), importedTemplates);
+    const importedSettings = normalizeAssignmentSettings(config?.settings || {});
+    const importedCatalog = getNormalizedResearchCatalog(config?.researchCatalog || {});
+
+    saveCustomProfiles(importedTemplates);
+    saveActiveProfileNames(importedActiveProfiles);
+    saveResearchCatalog(importedCatalog);
+    saveAssignmentSettings(importedSettings);
+
+    refreshProfiles();
+    loadedResearches = loadSavedResearches();
+    populateProfileSelect();
+    renderTemplateLibraryList();
+    renderProfileManagerList();
+    updateAssignmentStageUi();
+    closeProfileEditor();
+    setStatus('✅ Настройки импортированы');
+}
+
+function importConfigFile(file) {
+    if (!file) {
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+        try {
+            importConfigObject(JSON.parse(String(reader.result || '{}')));
+        } catch (error) {
+            console.error('Не удалось импортировать настройки', error);
+            setStatus('❌ Не удалось прочитать файл настроек', '#f44336');
+        }
+    };
+    reader.readAsText(file, 'utf-8');
 }
 
 async function loadResearchesForEditor() {
@@ -950,10 +1158,25 @@ async function readResearchesFromPage() {
     };
 }
 
+function saveScenarioSettingsFromUi() {
+    const slider = document.getElementById('assignmentStageSlider');
+    const targetCabinetInput = document.getElementById('targetCabinetInput');
+    const markUrgentCheckbox = document.getElementById('markUrgentCheckbox');
+    const settings = saveAssignmentSettings({
+        assignmentStage: slider?.value === '1' ? ASSIGNMENT_STAGE_SCHEDULE : ASSIGNMENT_STAGE_ANALYSES,
+        targetCabinet: targetCabinetInput?.value || '',
+        markUrgent: markUrgentCheckbox?.checked === true
+    });
+
+    updateAssignmentStageUi(settings);
+}
+
 // Заполняем выпадающий список профилями
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    applyExtensionConfig(await loadExtensionConfigFile());
     refreshProfiles();
     populateProfileSelect();
+    renderTemplateLibraryList();
     renderProfileManagerList();
     updateAssignmentStageUi();
 
@@ -964,9 +1187,14 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('saveProfile').addEventListener('click', saveProfileFromEditor);
     document.getElementById('loadResearches').addEventListener('click', loadResearchesForEditor);
     document.getElementById('researchSearch').addEventListener('input', renderResearchList);
-    document.getElementById('assignmentStageSlider').addEventListener('input', (event) => {
-        const stage = event.target.value === '0' ? ASSIGNMENT_STAGE_ANALYSES : ASSIGNMENT_STAGE_SCHEDULE;
-        updateAssignmentStageUi(saveAssignmentStage(stage));
+    document.getElementById('assignmentStageSlider').addEventListener('input', saveScenarioSettingsFromUi);
+    document.getElementById('targetCabinetInput').addEventListener('input', saveScenarioSettingsFromUi);
+    document.getElementById('markUrgentCheckbox').addEventListener('change', saveScenarioSettingsFromUi);
+    document.getElementById('exportConfig').addEventListener('click', exportConfigFile);
+    document.getElementById('importConfig').addEventListener('click', () => document.getElementById('importConfigFile').click());
+    document.getElementById('importConfigFile').addEventListener('change', (event) => {
+        importConfigFile(event.target.files?.[0]);
+        event.target.value = '';
     });
 });
 
@@ -996,7 +1224,7 @@ document.getElementById('fillForm').addEventListener('click', () => {
     localStorage.setItem('lastSelectedProfile', selectedProfile);
     
     const formData = PROFILES[selectedProfile];
-    const assignmentStage = getAssignmentStage();
+    const assignmentSettings = getAssignmentSettings();
     statusDiv.textContent = '⏳ Заполнение...';
     statusDiv.style.color = '#ff9800';
     fillButton.disabled = true;
@@ -1012,7 +1240,7 @@ document.getElementById('fillForm').addEventListener('click', () => {
         chrome.scripting.executeScript({
             target: { tabId: tabs[0].id },
             func: fillForm,
-            args: [formData, selectedProfile, assignmentStage]
+            args: [formData, selectedProfile, assignmentSettings]
         }, (results) => {
             if (chrome.runtime.lastError) {
                 statusDiv.textContent = `❌ Ошибка: ${chrome.runtime.lastError.message}`;
@@ -1039,7 +1267,7 @@ document.getElementById('closePopup').addEventListener('click', () => {
 // ==============================================
 // ФУНКЦИЯ ЗАПОЛНЕНИЯ ФОРМЫ
 // ==============================================
-async function fillForm(formData, profileName, assignmentStage = 'schedule') {
+async function fillForm(formData, profileName, assignmentSettings = {}) {
     console.log("╔════════════════════════════════════════════════════════════╗");
     console.log("║  МИС БАРС - Автоматическое назначение анализов           ║");
     console.log("║  Разработчик: MorozovRV                                   ║");
@@ -1053,9 +1281,11 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
     const TARGET_PAGE_SIZE = 150;
     const ASSIGNMENT_STAGE_ANALYSES = 'analyses';
     const ASSIGNMENT_STAGE_SCHEDULE = 'schedule';
-    const normalizedAssignmentStage = assignmentStage === ASSIGNMENT_STAGE_ANALYSES
-        ? ASSIGNMENT_STAGE_ANALYSES
-        : ASSIGNMENT_STAGE_SCHEDULE;
+    const targetCabinetName = String(assignmentSettings?.targetCabinet || '').trim();
+    const normalizedAssignmentStage = targetCabinetName && assignmentSettings?.assignmentStage === ASSIGNMENT_STAGE_SCHEDULE
+        ? ASSIGNMENT_STAGE_SCHEDULE
+        : ASSIGNMENT_STAGE_ANALYSES;
+    const shouldMarkUrgent = assignmentSettings?.markUrgent === true;
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1446,7 +1676,8 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
         return { changed: false, reason: 'not_found', count: getCheckboxes().length };
     };
 
-    const ASSIGNMENT_CABINET_LABEL = 'лаборатория амурск';
+    const ASSIGNMENT_CABINET_LABEL = normalizeText(targetCabinetName);
+    const ASSIGNMENT_CABINET_TOKENS = ASSIGNMENT_CABINET_LABEL.split(' ').filter(Boolean);
     const DEBUG_LOG_KEY = '__FillBARS_DEBUG_LOGS';
     const DEBUG_LOG_NODE_ID = 'fillbars-debug-logs';
     const DEBUG_LOG_STORAGE_KEY = 'FillBARS.debugLogs';
@@ -1513,7 +1744,12 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
         return entry;
     };
 
-    debugLog('fill:start', { profileName, assignmentStage: normalizedAssignmentStage });
+    debugLog('fill:start', {
+        profileName,
+        assignmentStage: normalizedAssignmentStage,
+        targetCabinetName,
+        shouldMarkUrgent
+    });
     console.log('FillBARS debug: copy(document.getElementById("fillbars-debug-logs")?.textContent || sessionStorage.getItem("FillBARS.debugLogs") || "нет логов")');
 
     const getVisibleElements = (selector, root = document) => {
@@ -1644,7 +1880,8 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
     };
 
     const hasCabinetLabel = (label) => {
-        return label.includes('лаборатория') && label.includes('амурск');
+        return ASSIGNMENT_CABINET_TOKENS.length > 0
+            && ASSIGNMENT_CABINET_TOKENS.every((token) => label.includes(token));
     };
 
     const getGridRoot = (element) => {
@@ -2005,7 +2242,7 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
 
         for (const input of inputs) {
             debugLog('cabinet_filter:set_value', { input: describeElement(input) });
-            await setInputValue(input, 'Лаборатория Амурск');
+            await setInputValue(input, targetCabinetName);
             await clickFindInCabinetWindow(cabinetWindow);
             await sleep(900);
 
@@ -2227,7 +2464,7 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
         }
 
         if (!cabinetRow) {
-            console.warn('В окне "Кабинеты" не найдена строка "Лаборатория Амурск".');
+            console.warn(`В окне "Кабинеты" не найдена строка "${targetCabinetName}".`);
             debugLog('cabinet_select:row_not_found', {
                 index,
                 cabinetWindow: describeElement(cabinetWindow)
@@ -2236,7 +2473,7 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
         }
 
         cabinetRow.scrollIntoView({ block: 'center', inline: 'nearest' });
-        console.log('Окно "Кабинеты": выбираю "Лаборатория Амурск".');
+        console.log(`Окно "Кабинеты": выбираю "${targetCabinetName}".`);
         debugLog('cabinet_select:row_click', {
             index,
             row: describeElement(cabinetRow)
@@ -2268,7 +2505,7 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
             return true;
         }
 
-        console.warn(`Лаборатория Амурск не применилась для строки ${index + 1}. Останавливаю дальнейшую обработку.`);
+        console.warn(`${targetCabinetName} не применился для строки ${index + 1}. Останавливаю дальнейшую обработку.`);
         debugLog('cabinet_select:not_applied', {
             index,
             guide: describeElement(guide?.button),
@@ -2496,7 +2733,7 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
             const urgentCount = findUrgentCheckboxesInSchedule(scheduleForm).length;
             const key = `${guideCount}:${urgentCount}`;
 
-            if (guideCount > 0 && urgentCount > 0) {
+            if (guideCount > 0 && (!shouldMarkUrgent || urgentCount > 0)) {
                 lastReady = { scheduleForm, guideCount, urgentCount };
 
                 if (key !== lastKey) {
@@ -2553,10 +2790,12 @@ async function fillForm(formData, profileName, assignmentStage = 'schedule') {
             return `подбор времени остановлен (${resultMessage})`;
         }
 
-        const urgentResult = await setUrgentCheckboxesInSchedule();
+        const urgentResult = shouldMarkUrgent
+            ? await setUrgentCheckboxesInSchedule()
+            : { selected: 0, total: 0, skipped: true };
         const resultMessage = [
             `кабинеты: ${cabinetsResult.selected}/${cabinetsResult.total}`,
-            `срочно: ${urgentResult.selected}/${urgentResult.total}`
+            urgentResult.skipped ? 'срочно: пропущено' : `срочно: ${urgentResult.selected}/${urgentResult.total}`
         ].join(', ');
 
         console.log(`Подбор времени подготовлен (${resultMessage}). Кнопка "Записать" не нажималась.`);

@@ -181,6 +181,41 @@
         .scenario-label.right {
             text-align: right;
         }
+        .setting-field {
+            margin-top: 8px;
+        }
+        .setting-field input[type="text"] {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 7px 9px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .checkbox-row {
+            display: grid;
+            grid-template-columns: 18px 1fr;
+            gap: 6px;
+            align-items: center;
+            margin-top: 8px;
+            font-size: 12px;
+            color: #555;
+        }
+        .checkbox-row input {
+            margin: 0;
+        }
+        .settings-note {
+            font-size: 11px;
+            color: #777;
+            margin-top: 6px;
+            min-height: 14px;
+        }
+        .config-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
         .profile-list {
             max-height: 170px;
             overflow-y: auto;
@@ -206,6 +241,20 @@
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }
+        .template-row {
+            display: grid;
+            grid-template-columns: 20px 1fr 48px;
+            gap: 6px;
+            align-items: center;
+            padding: 6px;
+            border-bottom: 1px solid #ededed;
+        }
+        .template-row:last-child {
+            border-bottom: none;
+        }
+        .template-row input {
+            margin: 0;
         }
         .small-btn {
             width: auto;
@@ -385,9 +434,29 @@
             <div class="scenario-slider">
                 <input id="assignmentStageSlider" type="range" min="0" max="1" step="1">
                 <div class="scenario-label">Только анализы</div>
-                <div class="scenario-label right">Кабинеты и срочно</div>
+                <div class="scenario-label right">Кабинеты</div>
             </div>
+            <div class="setting-field">
+                <label for="targetCabinetInput">Кабинет для подбора:</label>
+                <input id="targetCabinetInput" type="text" list="cabinetOptions" placeholder="Например: Лаборатория Амурск">
+                <datalist id="cabinetOptions">
+                    <option value="Лаборатория Амурск"></option>
+                </datalist>
+            </div>
+            <label class="checkbox-row">
+                <input id="markUrgentCheckbox" type="checkbox">
+                <span>Ставить галочки "Срочно"</span>
+            </label>
+            <div id="assignmentStageHint" class="settings-note"></div>
         </div>
+        <div class="config-actions">
+            <button id="exportConfig" class="small-btn secondary-btn" type="button">Экспорт настроек</button>
+            <button id="importConfig" class="small-btn secondary-btn" type="button">Импорт настроек</button>
+            <input id="importConfigFile" class="hidden" type="file" accept="application/json,.json">
+        </div>
+        <div class="settings-title">Библиотека шаблонов</div>
+        <div id="templateLibraryList" class="profile-list"></div>
+        <div class="settings-title">Активные шаблоны</div>
         <div id="profileManagerList" class="profile-list"></div>
         <button id="addProfile" type="button">➕ Добавить назначение</button>
 
@@ -398,7 +467,7 @@
             <div id="iconPicker" class="icon-picker"></div>
 
             <label>Название назначения:</label>
-            <input id="profileNameInput" class="profile-name-input" type="text" placeholder="Например: Острый панкреатит">
+            <input id="profileNameInput" class="profile-name-input" type="text" placeholder="Например: Ежедневный анализ">
 
             <label>Исследования:</label>
             <div class="research-toolbar">
